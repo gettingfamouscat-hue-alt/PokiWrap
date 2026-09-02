@@ -39,7 +39,7 @@ export function DownloadButtons() {
         </article>
         <article className={`card${platform === "mac" ? " recommended" : ""}`}>
           <h2>macOS</h2>
-          <p>PokiWrap.app for Apple Silicon and Intel. Unzip, then open PokiWrap.</p>
+          <p>PokiWrap.app for Apple Silicon and Intel. Unzip, then double-click Open PokiWrap.</p>
           <a className={platform === "mac" ? "btn" : "btn ghost"} href={macUrl}>
             Download for Mac
           </a>
@@ -49,9 +49,15 @@ export function DownloadButtons() {
         {platform === "windows"
           ? "We detected Windows — grab that installer. macOS is available too."
           : platform === "mac"
-            ? "We detected a Mac — grab the macOS zip. Windows is available too."
+            ? "If macOS says the app is damaged, unzip the download and double-click Open PokiWrap. That clears Gatekeeper."
             : "Pick your platform. Files come from the latest GitHub release, or /downloads if you host them yourself."}
       </p>
+      {platform === "mac" ? (
+        <p className="hint mac-help">
+          Or paste this in Terminal:
+          <code>xattr -cr ~/Downloads/PokiWrap.app && open ~/Downloads/PokiWrap.app</code>
+        </p>
+      ) : null}
     </>
   );
 }

@@ -758,6 +758,52 @@ def ensure_login_exe() -> Path:
     return build_login_exe()
 
 
+def _package_macos_release(app_path: Path, root: Path) -> Path:
+    """Sign the .app, zip with ditto (keeps symlinks), and add a Gatekeeper opener."""
+    stage = app_path.parent / "macos_release"
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
+    staged_app = stage / "PokiWrap.app"
+    shutil.copytree(app_path, staged_app, symlinks=True)
+    subprocess.run(["xattr", "-cr", str(staged_app)], check=False)
+    signed = subprocess.run(
+        ["codesign", "--force", "--deep", "--sign", "-", str(staged_app)],
+        capture_output=True,
+        text=True,
+    )
+    if signed.returncode != 0:
+        raise RuntimeError(signed.stderr[-2000:] if signed.stderr else "codesign failed.")
+    opener = stage / "Open PokiWrap.command"
+    opener.write_text(
+        "#!/bin/bash\n"
+        'DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+        'APP="$DIR/PokiWrap.app"\n'
+        'xattr -cr "$APP" 2>/dev/null || true\n'
+        'open "$APP"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    opener.chmod(0o755)
+    zip_path = root / "PokiWrap-mac.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    ditto = subprocess.run(
+        ["ditto", "-c", "-k", str(stage), str(zip_path)],
+        capture_output=True,
+        text=True,
+    )
+    if ditto.returncode != 0 or not zip_path.exists():
+        raise RuntimeError(ditto.stderr[-2000:] if ditto.stderr else "ditto zip failed.")
+    release = root / "web" / "public" / "downloads" / "PokiWrap-mac.zip"
+    try:
+        release.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(zip_path, release)
+    except OSError:
+        pass
+    return zip_path
+
+
 def build_pokiwrap_exe() -> Path | None:
     """Freeze the generator UI for the current OS (Windows .exe or macOS .app)."""
     from pokiwrap.paths import assets_dir, project_root
@@ -847,17 +893,7 @@ def build_pokiwrap_exe() -> Path | None:
     app_path = dist / "PokiWrap.app"
     if completed.returncode != 0 or not app_path.exists():
         raise RuntimeError(completed.stderr[-2000:] if completed.stderr else "PyInstaller failed.")
-    zip_path = project_root() / "PokiWrap-mac.zip"
-    if zip_path.exists():
-        zip_path.unlink()
-    shutil.make_archive(str(zip_path.with_suffix("")), "zip", root_dir=dist, base_dir="PokiWrap.app")
-    release = project_root() / "web" / "public" / "downloads" / "PokiWrap-mac.zip"
-    try:
-        release.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(zip_path, release)
-    except OSError:
-        pass
-    return zip_path
+    return _package_macos_release(app_path, project_root())
 
 
 def build_pokiwrap_app() -> Path | None:
