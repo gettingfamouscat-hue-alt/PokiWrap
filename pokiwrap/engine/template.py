@@ -10,9 +10,13 @@ CHROME_HIDE_JS = r"""
     return [frame.src, frame.getAttribute("src"), frame.getAttribute("data-src"), frame.getAttribute("data-iframe-src")].join(" ");
   }
 
-  function isAdFrame(iframe) {
-    return /ads\.poki|doubleclick|googlesyndication|imasdk|adnxs|prebid|facebook\.com|youtube\.com\/embed/i.test(frameSrc(iframe));
-  }
+    function isAuthFrame(iframe) {
+      return /accounts\.google|appleid\.apple|login\.live|login\.microsoftonline|firebaseapp|identitytoolkit|securetoken/i.test(frameSrc(iframe));
+    }
+
+    function isAdFrame(iframe) {
+      return /ads\.poki|doubleclick|googlesyndication|imasdk|adnxs|prebid|facebook\.com|youtube\.com\/embed/i.test(frameSrc(iframe));
+    }
 
   function isGameFrame(iframe) {
     return /games\.poki\.com|poki-gdn\.com|gdn\.poki\.com|game-cdn\.poki|poki-cdn\.com\/game/i.test(frameSrc(iframe));
@@ -75,6 +79,9 @@ CHROME_HIDE_JS = r"""
       for (var i = 0; i < parent.children.length; i++) {
         var sibling = parent.children[i];
         if (sibling !== node && sibling.id !== "pokiwrap-chrome-hide") {
+          var tag = (sibling.tagName || "").toUpperCase();
+          if (tag === "SCRIPT" || tag === "STYLE" || tag === "LINK") continue;
+          if (tag === "IFRAME" && isAuthFrame(sibling)) continue;
           sibling.style.setProperty("display", "none", "important");
           sibling.style.setProperty("visibility", "hidden", "important");
           sibling.style.setProperty("pointer-events", "none", "important");
@@ -201,6 +208,19 @@ PROFILE_NAME = __PROFILE_NAME__
 CHROME_HIDE_JS = __CHROME_HIDE_JS__
 
 
+def _shared_pokiwrap_profile() -> Path:
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "PokiWrap"
+    elif sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "PokiWrap"
+    else:
+        base = Path.home() / ".local" / "share" / "PokiWrap"
+    path = base / "account_webview"
+    (path / "storage").mkdir(parents=True, exist_ok=True)
+    (path / "cache").mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def chrome_user_agent() -> str:
     if sys.platform == "darwin":
         return (
@@ -243,6 +263,17 @@ class GamePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level, message, line, source) -> None:
         return
 
+    def createWindow(self, _wintype):
+        holder = QWebEnginePage(self.profile(), self)
+
+        def follow(url: QUrl) -> None:
+            if url.isEmpty() or url.scheme() in {"about", "blob", "javascript"}:
+                return
+            self.setUrl(url)
+
+        holder.urlChanged.connect(follow)
+        return holder
+
     def acceptNavigationRequest(self, url, nav_type, is_main_frame) -> bool:
         if not is_main_frame:
             return True
@@ -267,10 +298,10 @@ class GameWindow(QMainWindow):
         if icon_png.exists():
             self.setWindowIcon(QIcon(str(icon_png)))
 
-        storage = root / "profile"
+        storage = _shared_pokiwrap_profile()
         storage.mkdir(parents=True, exist_ok=True)
 
-        self._profile = QWebEngineProfile(PROFILE_NAME, self)
+        self._profile = QWebEngineProfile("pokiwrap_account", self)
         self._profile.setPersistentStoragePath(str(storage / "storage"))
         self._profile.setCachePath(str(storage / "cache"))
         self._profile.setPersistentCookiesPolicy(

@@ -85,14 +85,29 @@ PROTECTED = {
     "img.poki-cdn.com",
     "poki-gdn.com",
     "user-vault.poki.com",
+    "api.poki.com",
+    "auth.poki.com",
+    "account.poki.com",
+    "accounts.poki.com",
     "google.com",
     "www.google.com",
     "googleapis.com",
+    "identitytoolkit.googleapis.com",
+    "securetoken.googleapis.com",
+    "firebaseio.com",
+    "firebaseapp.com",
+    "firebase.com",
     "gstatic.com",
     "microsoft.com",
     "live.com",
     "apple.com",
 }
+
+def _is_protected(host: str) -> bool:
+    if host in PROTECTED:
+        return True
+    return any(host.endswith("." + allowed) for allowed in PROTECTED)
+
 
 _HOST = re.compile(r"^\|\|([a-zA-Z0-9.-]+)(?:[\^/$?]|$)")
 
@@ -130,7 +145,7 @@ def _parse_filter_list(text: str) -> set[str]:
         if not match:
             continue
         host = match.group(1).lower().rstrip(".")
-        if "*" in host or host.count(".") < 1 or host in PROTECTED:
+        if "*" in host or host.count(".") < 1 or _is_protected(host):
             continue
         domains.add(host)
     return domains

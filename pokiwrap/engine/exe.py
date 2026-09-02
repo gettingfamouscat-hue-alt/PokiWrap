@@ -94,7 +94,7 @@ internal sealed class GameForm : Form
         }}
         catch {{ }}
 
-        string userData = {user_data};
+        string userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PokiWrap", "account_webview");
         Directory.CreateDirectory(userData);
 
         Label loading = new Label();
@@ -164,6 +164,7 @@ internal sealed class GameForm : Form
             web.CoreWebView2.NewWindowRequested += delegate(object sWin, CoreWebView2NewWindowRequestedEventArgs eWin)
             {{
                 eWin.Handled = true;
+                try {{ web.CoreWebView2.Navigate(eWin.Uri); }} catch {{ }}
             }};
             web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync({fill_js});
             Timer iso = new Timer();
@@ -221,13 +222,18 @@ internal sealed class GameForm : Form
                     string path = string.IsNullOrEmpty(parts[2]) ? "/" : parts[2];
                     if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(domain))
                         continue;
-                    if (domain.IndexOf("poki", StringComparison.OrdinalIgnoreCase) < 0)
+                    if (domain.IndexOf("poki", StringComparison.OrdinalIgnoreCase) < 0
+                        && domain.IndexOf("google", StringComparison.OrdinalIgnoreCase) < 0
+                        && domain.IndexOf("firebase", StringComparison.OrdinalIgnoreCase) < 0
+                        && domain.IndexOf("apple", StringComparison.OrdinalIgnoreCase) < 0)
                         continue;
                     string value = Encoding.UTF8.GetString(Convert.FromBase64String(parts[7]));
                     CoreWebView2Cookie cookie = core.CookieManager.CreateCookie(name, value, domain, path);
                     cookie.IsHttpOnly = parts[3] == "1";
                     cookie.IsSecure = parts[4] == "1" || name.StartsWith("__Secure") || name.StartsWith("__Host");
-                    cookie.SameSite = CoreWebView2CookieSameSiteKind.Lax;
+                    cookie.SameSite = cookie.IsSecure
+                        ? CoreWebView2CookieSameSiteKind.None
+                        : CoreWebView2CookieSameSiteKind.Lax;
                     double expires = 0;
                     double.TryParse(parts[6], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out expires);
                     if (parts[5] != "1" && expires > 0)
@@ -292,12 +298,10 @@ def build_game_exe(
     exe_name = _safe_shortcut_name(app_name) + ".exe"
     exe_path = folder / exe_name
     source_path = folder / "_player.cs"
-    user_data = folder / "profile"
     icon = icon_path if icon_path and icon_path.exists() else folder / "icon.ico"
     page = page_url or game_url
     slug = page.rstrip("/").split("/")[-1].split("?")[0]
     isolate = CHROME_HIDE_JS.replace("__TARGET_SLUG__", slug)
-    user_data.mkdir(parents=True, exist_ok=True)
     try:
         from pokiwrap.engine.adblock import ensure_adblock_list
         ensure_adblock_list()
@@ -309,7 +313,6 @@ def build_game_exe(
             app_id=_csharp_string("PokiWrap." + _safe_shortcut_name(app_name).replace(" ", "")),
             app_name=_csharp_string(app_name),
             icon_path=_csharp_string(str(icon.resolve()) if icon.exists() else ""),
-            user_data=_csharp_string(str(user_data.resolve())),
             fill_js=_csharp_string(isolate),
             game_url=_csharp_string(game_url),
             page_url=_csharp_string(page),
@@ -475,39 +478,62 @@ internal static class AccountStore
             if (done != null) done();
             return;
         }}
-        core.CookieManager.GetCookiesAsync("https://poki.com/").ContinueWith(
+        string[] urls = new string[] {{
+            "https://poki.com/",
+            "https://www.poki.com/",
+            "https://user-vault.poki.com/",
+            "https://api.poki.com/",
+            "https://games.poki.com/"
+        }};
+        SaveCookiesFrom(core, cookieFile, urls, 0, new Dictionary<string, string>(), done);
+    }}
+
+    static void AppendCookie(Dictionary<string, string> seen, CoreWebView2Cookie cookie)
+    {{
+        string host = cookie.Domain == null ? "" : cookie.Domain.ToLowerInvariant();
+        if (host.IndexOf("poki") < 0 && host.IndexOf("google") < 0 && host.IndexOf("firebase") < 0)
+            return;
+        string key = cookie.Name + "\\n" + cookie.Domain + "\\n" + cookie.Path;
+        string value = Convert.ToBase64String(Encoding.UTF8.GetBytes(cookie.Value ?? ""));
+        bool session = cookie.Expires.Year < 2000;
+        double unix = 0;
+        if (!session)
+            unix = (cookie.Expires.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+        seen[key] = cookie.Name + "\\t" + cookie.Domain + "\\t" + cookie.Path + "\\t"
+            + (cookie.IsHttpOnly ? "1" : "0") + "\\t" + (cookie.IsSecure ? "1" : "0") + "\\t"
+            + (session ? "1" : "0") + "\\t" + unix.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + "\\t" + value + "\\r\\n";
+    }}
+
+    static void SaveCookiesFrom(CoreWebView2 core, string cookieFile, string[] urls, int index, Dictionary<string, string> seen, Action done)
+    {{
+        if (index >= urls.Length)
+        {{
+            try
+            {{
+                StringBuilder sb = new StringBuilder();
+                foreach (string line in seen.Values)
+                    sb.Append(line);
+                Directory.CreateDirectory(Path.GetDirectoryName(cookieFile));
+                File.WriteAllText(cookieFile, sb.ToString());
+            }}
+            catch {{ }}
+            if (done != null) done();
+            return;
+        }}
+        core.CookieManager.GetCookiesAsync(urls[index]).ContinueWith(
             delegate(Task<List<CoreWebView2Cookie>> task)
             {{
                 try
                 {{
-                    StringBuilder sb = new StringBuilder();
                     if (task.Status == TaskStatus.RanToCompletion)
                     {{
                         foreach (CoreWebView2Cookie cookie in task.Result)
-                        {{
-                            string host = cookie.Domain == null ? "" : cookie.Domain.ToLowerInvariant();
-                            if (host.IndexOf("poki") < 0)
-                                continue;
-                            string value = Convert.ToBase64String(Encoding.UTF8.GetBytes(cookie.Value ?? ""));
-                            bool session = cookie.Expires.Year < 2000;
-                            double unix = 0;
-                            if (!session)
-                                unix = (cookie.Expires.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-                            sb.Append(cookie.Name).Append('\\t')
-                              .Append(cookie.Domain).Append('\\t')
-                              .Append(cookie.Path).Append('\\t')
-                              .Append(cookie.IsHttpOnly ? "1" : "0").Append('\\t')
-                              .Append(cookie.IsSecure ? "1" : "0").Append('\\t')
-                              .Append(session ? "1" : "0").Append('\\t')
-                              .Append(unix.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\\t')
-                              .Append(value).Append("\\r\\n");
-                        }}
+                            AppendCookie(seen, cookie);
                     }}
-                    Directory.CreateDirectory(Path.GetDirectoryName(cookieFile));
-                    File.WriteAllText(cookieFile, sb.ToString());
                 }}
                 catch {{ }}
-                if (done != null) done();
+                SaveCookiesFrom(core, cookieFile, urls, index + 1, seen, done);
             }});
     }}
 }}

@@ -82,6 +82,18 @@ internal static class AdBlock
             return true;
         if (host == "game-cdn.poki.com" || host == "user-vault.poki.com")
             return true;
+        if (host == "api.poki.com" || host.EndsWith(".api.poki.com"))
+            return true;
+        if (host == "auth.poki.com" || host == "account.poki.com" || host == "accounts.poki.com")
+            return true;
+        if (host.Contains("firebase"))
+            return true;
+        if (host == "identitytoolkit.googleapis.com" || host == "securetoken.googleapis.com")
+            return true;
+        if (host == "firebaseinstallations.googleapis.com" || host == "firestore.googleapis.com")
+            return true;
+        if (host == "oauth2.googleapis.com" || host == "www.googleapis.com")
+            return true;
         if (host == "accounts.google.com" || host == "appleid.apple.com")
             return true;
         if (host == "login.microsoftonline.com" || host == "login.live.com")

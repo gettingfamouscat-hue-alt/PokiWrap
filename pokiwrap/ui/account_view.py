@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QCheckBox, QFrame, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -82,8 +84,8 @@ class AccountView(QWidget):
         card_layout.addWidget(adblock_hint)
 
         note = QLabel(
-            "A Poki sign-in window will open. After you are signed in, click Done. "
-            "Close running game wrappers first if sign-in cannot start."
+            "A Poki sign-in window will open. Sign in with the same method you use on poki.com, "
+            "then click Done. Close running games first. Wrappers share that signed-in session."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #6E7384; font-size: 12px;")
@@ -126,6 +128,19 @@ class AccountView(QWidget):
             self.detail.setText("Waiting for the Poki sign-in window…")
 
     def _connect(self) -> None:
+        if sys.platform != "win32":
+            try:
+                from pokiwrap.engine.account import connect_account
+
+                self._busy(True)
+                connect_account(self.window())
+            except Exception as exc:
+                self.detail.setText(str(exc) or "Could not open the Poki sign-in window.")
+                self._busy(False)
+                return
+            self._busy(False)
+            self.refresh()
+            return
         self._start(False)
 
     def _sign_out(self) -> None:

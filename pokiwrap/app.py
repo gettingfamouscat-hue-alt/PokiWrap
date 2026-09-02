@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QThread
+from PyQt6.QtCore import QThread, Qt
 from PyQt6.QtWidgets import QApplication
 
 from pokiwrap.paths import assets_dir, generated_apps_dir
@@ -63,7 +63,16 @@ def run() -> int:
         ensure_adblock_list()
     except Exception:
         pass
+    if sys.platform == "darwin":
+        try:
+            from pokiwrap.engine.generator import rewrite_existing_wrappers
+
+            rewrite_existing_wrappers()
+        except Exception:
+            pass
     _set_app_id()
+    if sys.platform == "darwin":
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setApplicationName("PokiWrap")
     app.setOrganizationName("PokiWrap")
