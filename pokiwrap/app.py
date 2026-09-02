@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
 
 from PyQt6.QtCore import QThread
 from PyQt6.QtWidgets import QApplication
@@ -33,8 +35,28 @@ def _set_app_id() -> None:
         return
 
 
+def _prepare_qt() -> None:
+    os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+    if sys.platform == "darwin":
+        os.environ.setdefault("QT_MAC_WANTS_LAYER", "1")
+    if getattr(sys, "frozen", False):
+        meipass = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+        for relative in (
+            Path("PyQt6") / "Qt6" / "plugins",
+            Path("PyQt6") / "Qt" / "plugins",
+        ):
+            plugins = meipass / relative
+            if (plugins / "platforms").exists():
+                os.environ.setdefault("QT_PLUGIN_PATH", str(plugins))
+                break
+
+
 def run() -> int:
-    generated_apps_dir()
+    _prepare_qt()
+    try:
+        generated_apps_dir()
+    except OSError:
+        pass
     try:
         from pokiwrap.engine.adblock import ensure_adblock_list
 
@@ -58,4 +80,6 @@ def run() -> int:
     window._adblock_updater = updater
     updater.start()
     window.show()
+    window.raise_()
+    window.activateWindow()
     return app.exec()

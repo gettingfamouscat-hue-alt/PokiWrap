@@ -11,6 +11,17 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def macos_app_bundle() -> Path | None:
+    """PokiWrap.app root when running from a macOS bundle."""
+    if sys.platform != "darwin":
+        return None
+    exe = Path(sys.executable).resolve()
+    for parent in exe.parents:
+        if parent.name.endswith(".app"):
+            return parent
+    return None
+
+
 def install_root() -> Path:
     """Folder containing PokiWrap.exe, or the source project."""
     if is_frozen():
@@ -19,12 +30,16 @@ def install_root() -> Path:
 
 
 def project_root() -> Path:
-    """Stable project folder — never the PyInstaller unpack directory."""
+    """Stable writable project folder — never a macOS .app bundle or _MEI temp."""
     if not is_frozen():
         return Path(__file__).resolve().parent.parent
 
     exe_dir = install_root()
     known = Path.home() / "Desktop" / "PokiWrap"
+    if macos_app_bundle() is not None:
+        if (known / "main.py").exists() or (known / "generated_apps").is_dir():
+            return known
+        return app_data_dir()
     candidates = [
         exe_dir,
         exe_dir / "PokiWrap",
@@ -92,7 +107,12 @@ def desktop_dir() -> Path:
 
 
 def app_data_dir() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    if sys.platform == "darwin":
+        root = Path.home() / "Library" / "Application Support"
+    elif sys.platform == "win32":
+        root = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    else:
+        root = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
     path = root / "PokiWrap"
     path.mkdir(parents=True, exist_ok=True)
     return path
