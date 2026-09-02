@@ -2,3 +2,4 @@ PyQt6>=6.6.0
 PyQt6-WebEngine>=6.6.0
 pyinstaller>=6.0.0
 Pillow>=10.0.0
+certifi>=2024.0.0

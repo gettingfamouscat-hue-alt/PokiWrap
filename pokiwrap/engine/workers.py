@@ -6,8 +6,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from pokiwrap.catalog import CatalogGame
 from pokiwrap.engine.artwork import fetch_logo_bytes, fetch_page_artwork
-from pokiwrap.engine.generator import generate_app
-from pokiwrap.paths import assets_dir
+from pokiwrap.engine.generator import generate_app, game_slug_from_url
+from pokiwrap.paths import catalog_cache_dir
 
 
 def slugify_cache(name: str) -> str:
@@ -41,14 +41,17 @@ class PagePreviewWorker(QThread):
         self._url = url
 
     def run(self) -> None:
+        title = ""
+        logo = b""
         try:
             artwork = fetch_page_artwork(self._url)
-            logo = b""
+            title = artwork.title
             if artwork.logo_url:
                 logo = fetch_logo_bytes(artwork.logo_url, self._url) or b""
-            self.ready.emit(self._url, artwork.title, logo)
-        except Exception as exc:
-            self.failed.emit(str(exc))
+        except Exception:
+            slug = game_slug_from_url(self._url)
+            title = slug.replace("-", " ").replace("_", " ").title()
+        self.ready.emit(self._url, title, logo)
 
 
 class CatalogLogoWorker(QThread):
@@ -59,8 +62,7 @@ class CatalogLogoWorker(QThread):
         self._games = games
 
     def run(self) -> None:
-        cache = assets_dir() / "catalog_cache"
-        cache.mkdir(parents=True, exist_ok=True)
+        cache = catalog_cache_dir()
         for game in self._games:
             cached = cache / f"{slugify_cache(game.title)}.img"
             if cached.exists() and cached.stat().st_size > 0:

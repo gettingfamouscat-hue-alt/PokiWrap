@@ -73,6 +73,23 @@ def list_apps() -> list[GeneratedApp]:
 
 
 def launch_app(app: GeneratedApp) -> None:
+    if sys.platform == "darwin":
+        from pokiwrap.paths import is_frozen
+
+        if is_frozen():
+            args = [sys.executable, "--play", str(app.folder)]
+        else:
+            args = [python_executable(), str(app.script_path)]
+        subprocess.Popen(
+            args,
+            cwd=str(app.folder),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+        )
+        return
     target = app.executable
     if target.suffix.lower() != ".exe" or not target.exists():
         matches = list(app.folder.glob("*.exe"))

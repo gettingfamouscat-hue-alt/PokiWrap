@@ -54,6 +54,17 @@ def _report_crash(exc: BaseException) -> None:
 if __name__ == "__main__":
     _install_logging()
     try:
+        try:
+            import certifi
+
+            os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        except Exception:
+            pass
+        from pokiwrap.engine.play import play_game, play_target_from_argv
+
+        target = play_target_from_argv(sys.argv)
+        if target is not None:
+            raise SystemExit(play_game(target))
         from pokiwrap.app import run
 
         raise SystemExit(run())

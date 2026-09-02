@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -87,11 +89,11 @@ class MainWindow(QMainWindow):
         shortcut_note = " Desktop shortcut created." if app.shortcut_path else ""
         self.statusBar().showMessage(f"Created {app.name}.{shortcut_note}", 6000)
         self.refresh_apps()
-        QMessageBox.information(
-            self,
-            "App ready",
-            f"{app.name} is a native .exe on your Desktop with the game logo. The game fills the window and skips the Poki site chrome.",
-        )
+        if sys.platform == "darwin":
+            detail = f"{app.name} is on your Desktop. Open it to play — the game fills the window and skips the Poki site chrome."
+        else:
+            detail = f"{app.name} is a native .exe on your Desktop with the game logo. The game fills the window and skips the Poki site chrome."
+        QMessageBox.information(self, "App ready", detail)
 
     def _on_generate_failed(self, message: str) -> None:
         self.statusBar().showMessage("Generation failed.", 5000)

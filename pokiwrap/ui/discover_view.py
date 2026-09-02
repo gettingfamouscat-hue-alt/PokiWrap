@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from pokiwrap.catalog import GAMES
-from pokiwrap.engine.generator import is_valid_http_url
+from pokiwrap.engine.generator import game_slug_from_url, is_valid_http_url
 from pokiwrap.engine.workers import CatalogLogoWorker, PagePreviewWorker
 from pokiwrap.ui.flow_layout import FlowLayout
 from pokiwrap.ui.game_card import GameCard, rounded_logo
@@ -139,6 +139,11 @@ class DiscoverView(QWidget):
         url = self.url_input.text().strip()
         if not is_valid_http_url(url):
             return
+        if not self.name_input.text().strip():
+            slug = game_slug_from_url(url)
+            if slug and slug not in {"poki_game"}:
+                pretty = slug.replace("-", " ").replace("_", " ").title()
+                self.name_input.setText(pretty)
         worker = PagePreviewWorker(url, self)
         worker.ready.connect(self._on_preview)
         worker.finished.connect(worker.deleteLater)
@@ -148,8 +153,11 @@ class DiscoverView(QWidget):
     def _on_preview(self, url: str, title: str, logo: bytes) -> None:
         if url.strip() != self.url_input.text().strip():
             return
-        if title and not self.name_input.text().strip():
-            self.name_input.setText(title)
+        if title:
+            current = self.name_input.text().strip()
+            slug_guess = game_slug_from_url(url).replace("-", " ").replace("_", " ").title()
+            if not current or current == slug_guess:
+                self.name_input.setText(title)
         if logo:
             pixmap = rounded_logo(logo, 40, 10)
             if not pixmap.isNull():

@@ -96,6 +96,12 @@ def assets_dir() -> Path:
     return path
 
 
+def catalog_cache_dir() -> Path:
+    path = app_data_dir() / "catalog_cache"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def desktop_dir() -> Path:
     if sys.platform == "win32":
         return Path.home() / "Desktop"

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import ssl
+import sys
 from dataclasses import dataclass
 from html import unescape
 from urllib.error import URLError
@@ -13,6 +15,10 @@ from urllib.request import Request, urlopen
 CHROME_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+)
+MAC_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
 POKI_IMG_CDN = (
@@ -54,18 +60,37 @@ class PageArtwork:
 
 def _headers(referer: str | None = None) -> dict[str, str]:
     headers = {
-        "User-Agent": CHROME_UA,
+        "User-Agent": MAC_UA if sys.platform == "darwin" else CHROME_UA,
         "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
     }
     if referer:
         headers["Referer"] = referer
     return headers
 
 
+def _ssl_context(unverified: bool = False):
+    if unverified:
+        return ssl._create_unverified_context()
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
 def fetch_bytes(url: str, timeout: float = 12.0, referer: str | None = None) -> bytes:
     request = Request(url, headers=_headers(referer))
-    with urlopen(request, timeout=timeout) as response:
-        return response.read()
+    try:
+        with urlopen(request, timeout=timeout, context=_ssl_context()) as response:
+            return response.read()
+    except (ssl.SSLError, URLError) as exc:
+        text = str(exc).lower()
+        if not isinstance(exc, ssl.SSLError) and "ssl" not in text and "certificate" not in text:
+            raise
+        with urlopen(request, timeout=timeout, context=_ssl_context(True)) as response:
+            return response.read()
 
 
 def fetch_text(url: str, timeout: float = 12.0) -> str:

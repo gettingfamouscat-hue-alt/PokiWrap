@@ -767,6 +767,16 @@ def _package_macos_release(app_path: Path, root: Path) -> Path:
     staged_app = stage / "PokiWrap.app"
     shutil.copytree(app_path, staged_app, symlinks=True)
     subprocess.run(["xattr", "-cr", str(staged_app)], check=False)
+    info_path = staged_app / "Contents" / "Info.plist"
+    if info_path.exists():
+        import plistlib
+
+        with info_path.open("rb") as handle:
+            info = plistlib.load(handle)
+        info["NSHighResolutionCapable"] = True
+        info["NSAppTransportSecurity"] = {"NSAllowsArbitraryLoads": True}
+        with info_path.open("wb") as handle:
+            plistlib.dump(info, handle)
     entitlements = root / "packaging" / "macos.entitlements"
     sign_cmd = ["codesign", "--force", "--sign", "-", "--timestamp=none"]
     if entitlements.exists():
@@ -857,23 +867,42 @@ def build_pokiwrap_exe() -> Path | None:
         str(project_root() / "assets") + os.pathsep + "assets",
         str(project_root() / "main.py"),
     ]
-    if sys.platform == "win32":
-        command.insert(command.index("--windowed") + 1, "--onefile")
-    else:
-        entitlements = project_root() / "packaging" / "macos.entitlements"
-        command.extend(["--osx-bundle-identifier", "app.pokiwrap.desktop", "--codesign-identity", "-"])
-        if entitlements.exists():
-            command.extend(["--osx-entitlements-file", str(entitlements)])
     command.extend(
         [
-            "--exclude-module",
-            "PyQt6.QtWebEngineCore",
-            "--exclude-module",
-            "PyQt6.QtWebEngineWidgets",
-            "--exclude-module",
-            "PyQt6.QtWebEngineQuick",
+            "--collect-data",
+            "certifi",
+            "--hidden-import",
+            "certifi",
         ]
     )
+    if sys.platform == "win32":
+        command.insert(command.index("--windowed") + 1, "--onefile")
+        command.extend(
+            [
+                "--exclude-module",
+                "PyQt6.QtWebEngineCore",
+                "--exclude-module",
+                "PyQt6.QtWebEngineWidgets",
+                "--exclude-module",
+                "PyQt6.QtWebEngineQuick",
+            ]
+        )
+    else:
+        entitlements = project_root() / "packaging" / "macos.entitlements"
+        command.extend(
+            [
+                "--osx-bundle-identifier",
+                "app.pokiwrap.desktop",
+                "--codesign-identity",
+                "-",
+                "--hidden-import",
+                "PyQt6.QtWebEngineWidgets",
+                "--hidden-import",
+                "PyQt6.QtWebEngineCore",
+            ]
+        )
+        if entitlements.exists():
+            command.extend(["--osx-entitlements-file", str(entitlements)])
     if icon.exists():
         icon_path = icon
         if sys.platform == "darwin":
