@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: python -c "from pokiwrap.engine.exe import build_pokiwrap_exe; print(build_pokiwrap_exe())"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: PokiWrap.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: python -c "from pokiwrap.engine.exe import build_pokiwrap_app; print(build_pokiwrap_app())"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: PokiWrap-mac.zip
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+      - name: Prepare files
+        run: |
+          mv windows/PokiWrap.exe PokiWrap-windows.exe
+          mv macos/PokiWrap-mac.zip PokiWrap-mac.zip
+      - name: Upload GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.{0}', github.run_number) }}
+          name: PokiWrap ${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.{0}', github.run_number) }}
+          files: |
+            PokiWrap-windows.exe
+            PokiWrap-mac.zip
+          generate_release_notes: true
