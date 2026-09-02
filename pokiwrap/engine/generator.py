@@ -14,7 +14,7 @@ from pokiwrap.engine.exe import build_game_exe, publish_desktop_exe
 from pokiwrap.engine.icons import render_fallback_icon, save_square_logo
 from pokiwrap.engine.shortcut import create_desktop_shortcut
 from pokiwrap.engine.template import CHROME_HIDE_JS, WRAPPER_TEMPLATE
-from pokiwrap.paths import generated_apps_dir
+from pokiwrap.paths import generated_app_roots, generated_apps_dir
 
 
 @dataclass
@@ -99,7 +99,19 @@ def write_wrapper_script(script_path: Path, name: str, url: str) -> None:
 
 def rewrite_existing_wrappers() -> int:
     count = 0
-    for folder in generated_apps_dir().iterdir():
+    folders: list[Path] = []
+    seen: set[Path] = set()
+    for root in generated_app_roots():
+        try:
+            for folder in root.iterdir():
+                if folder.is_dir():
+                    resolved = folder.resolve()
+                    if resolved not in seen:
+                        seen.add(resolved)
+                        folders.append(folder)
+        except OSError:
+            continue
+    for folder in folders:
         if not folder.is_dir():
             continue
         script_path = folder / "app.py"

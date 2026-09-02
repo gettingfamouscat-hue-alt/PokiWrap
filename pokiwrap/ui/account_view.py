@@ -84,8 +84,8 @@ class AccountView(QWidget):
         card_layout.addWidget(adblock_hint)
 
         note = QLabel(
-            "A Poki sign-in window will open. Sign in with the same method you use on poki.com, "
-            "then click Done. Close running games first. Wrappers share that signed-in session."
+            "Connect your Poki account inside PokiWrap (Chrome sign-in on the website does not carry over). "
+            "Close game windows first, then reconnect. Existing Windows .exe games are rebuilt to share that session."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #6E7384; font-size: 12px;")

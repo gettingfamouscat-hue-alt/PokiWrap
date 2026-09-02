@@ -14,6 +14,16 @@ from pokiwrap.theme import STYLESHEET, apply_dark_palette
 from pokiwrap.ui.main_window import MainWindow
 
 
+class _RewriteThread(QThread):
+    def run(self) -> None:
+        try:
+            from pokiwrap.engine.generator import rewrite_existing_wrappers
+
+            rewrite_existing_wrappers()
+        except Exception:
+            return
+
+
 class _AdblockUpdateThread(QThread):
     def run(self) -> None:
         try:
@@ -63,13 +73,6 @@ def run() -> int:
         ensure_adblock_list()
     except Exception:
         pass
-    if sys.platform == "darwin":
-        try:
-            from pokiwrap.engine.generator import rewrite_existing_wrappers
-
-            rewrite_existing_wrappers()
-        except Exception:
-            pass
     _set_app_id()
     if sys.platform == "darwin":
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
@@ -84,10 +87,13 @@ def run() -> int:
     apply_dark_palette(app)
     app.setStyleSheet(STYLESHEET)
     updater = _AdblockUpdateThread(app)
+    rewriter = _RewriteThread(app)
     app.setProperty("adblockUpdater", "1")
     window = MainWindow()
     window._adblock_updater = updater
+    window._wrapper_rewriter = rewriter
     updater.start()
+    rewriter.start()
     window.show()
     window.raise_()
     window.activateWindow()
