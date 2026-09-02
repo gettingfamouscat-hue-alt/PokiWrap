@@ -807,7 +807,20 @@ def build_pokiwrap_exe() -> Path | None:
     else:
         command.extend(["--osx-bundle-identifier", "app.pokiwrap.desktop"])
     if icon.exists():
-        command.extend(["--icon", str(icon)])
+        icon_path = icon
+        if sys.platform == "darwin":
+            icns = runtime_dir() / "pokiwrap.icns"
+            icns.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                from PIL import Image
+
+                image = Image.open(icon)
+                image.save(icns, format="ICNS")
+                icon_path = icns
+            except Exception:
+                icon_path = None
+        if icon_path:
+            command.extend(["--icon", str(icon_path)])
     completed = subprocess.run(command, capture_output=True, text=True, cwd=str(project_root()))
     if sys.platform == "win32":
         exe = dist / "PokiWrap.exe"

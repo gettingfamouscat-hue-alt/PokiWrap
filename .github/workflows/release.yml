@@ -40,6 +40,7 @@ jobs:
 
   release:
     needs: [windows, macos]
+    if: always() && needs.windows.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +48,7 @@ jobs:
       - name: Prepare files
         run: |
           mv windows/PokiWrap.exe PokiWrap-windows.exe
-          mv macos/PokiWrap-mac.zip PokiWrap-mac.zip
+          if [ -f macos/PokiWrap-mac.zip ]; then mv macos/PokiWrap-mac.zip PokiWrap-mac.zip; fi
       - name: Upload GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -56,4 +57,5 @@ jobs:
           files: |
             PokiWrap-windows.exe
             PokiWrap-mac.zip
+          fail_on_unmatched_files: false
           generate_release_notes: true
