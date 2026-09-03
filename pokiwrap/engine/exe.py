@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pokiwrap.engine.account import FIND_USER_JS
 from pokiwrap.engine.shortcut import _safe_shortcut_name
-from pokiwrap.engine.template import AD_SKIP_JS, CHROME_HIDE_JS
+from pokiwrap.engine.template import AD_SKIP_JS, CHROME_HIDE_JS, FS_KEY_JS
 from pokiwrap.engine.webview2 import ensure_webview2
 from pokiwrap.paths import (
     account_cookies_path,
@@ -81,6 +81,12 @@ internal static class Program
 
 internal sealed class GameForm : Form
 {{
+    bool fullScreen;
+    Rectangle windowedBounds;
+    FormWindowState windowedState;
+    FormBorderStyle windowedBorder = FormBorderStyle.Sizable;
+    int lastToggleTick;
+
     public GameForm()
     {{
         Text = {app_name};
@@ -89,6 +95,20 @@ internal sealed class GameForm : Form
         MinimumSize = new Size(800, 500);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.Black;
+        KeyPreview = true;
+        KeyDown += delegate(object sKey, KeyEventArgs eKey)
+        {{
+            if (eKey.KeyCode == Keys.F11)
+            {{
+                eKey.Handled = true;
+                _ToggleFullScreen();
+            }}
+            else if (eKey.KeyCode == Keys.Escape && fullScreen)
+            {{
+                eKey.Handled = true;
+                _ToggleFullScreen();
+            }}
+        }};
         try
         {{
             if (File.Exists({icon_path}))
@@ -144,12 +164,35 @@ internal sealed class GameForm : Form
             web.CoreWebView2.Settings.IsStatusBarEnabled = false;
             web.CoreWebView2.Settings.IsZoomControlEnabled = false;
             web.CoreWebView2.Settings.IsWebMessageEnabled = true;
+            try {{ web.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false; }} catch {{ }}
             web.CoreWebView2.Settings.UserAgent =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
             web.CoreWebView2.PermissionRequested += delegate(object sPerm, CoreWebView2PermissionRequestedEventArgs ePerm)
             {{
                 ePerm.Handled = true;
                 ePerm.State = CoreWebView2PermissionState.Allow;
+            }};
+            try
+            {{
+                FieldInfo field = typeof(WebView2).GetField("_coreWebView2Controller", BindingFlags.Instance | BindingFlags.NonPublic);
+                CoreWebView2Controller controller = field == null ? null : field.GetValue(web) as CoreWebView2Controller;
+                if (controller != null)
+                {{
+                    controller.AcceleratorKeyPressed += delegate(object sAcc, CoreWebView2AcceleratorKeyPressedEventArgs eAcc)
+                    {{
+                        if (eAcc.VirtualKey != 122)
+                            return;
+                        eAcc.Handled = true;
+                        if (eAcc.KeyEventKind == CoreWebView2KeyEventKind.KeyDown)
+                            _ToggleFullScreen();
+                    }};
+                }}
+            }}
+            catch {{ }}
+            web.CoreWebView2.ContainsFullScreenElementChanged += delegate
+            {{
+                if (web.CoreWebView2.ContainsFullScreenElement != fullScreen)
+                    _ToggleFullScreen();
             }};
             AdBlock.Attach(web.CoreWebView2, {adblock_list}, {adblock_settings});
             web.CoreWebView2.NavigationStarting += delegate(object sStart, CoreWebView2NavigationStartingEventArgs eStart)
@@ -166,6 +209,12 @@ internal sealed class GameForm : Form
             {{
                 loading.Visible = false;
                 web.BringToFront();
+                string msg = "";
+                try {{ msg = eMsg.TryGetWebMessageAsString(); }} catch {{ }}
+                if (msg == "f11")
+                    _ToggleFullScreen();
+                else if (msg == "esc" && fullScreen)
+                    _ToggleFullScreen();
             }};
             web.CoreWebView2.NavigationCompleted += delegate(object sNav, CoreWebView2NavigationCompletedEventArgs eNav)
             {{
@@ -189,6 +238,7 @@ internal sealed class GameForm : Form
             }};
             web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync({fill_js});
             web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync({ad_js});
+            web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync({fs_js});
             Timer iso = new Timer();
             iso.Interval = 500;
             iso.Tick += delegate(object sIso, EventArgs eIso)
@@ -203,10 +253,11 @@ internal sealed class GameForm : Form
             iso.Start();
             Action go = delegate
             {{
-                _PrepareWebsiteSave(web, {cookies_path}, {account_path}, delegate
-                {{
-                    web.CoreWebView2.Navigate({page_url});
-                }});
+                Action start = delegate {{ web.CoreWebView2.Navigate({page_url}); }};
+                if ({page_url}.IndexOf("poki.com", StringComparison.OrdinalIgnoreCase) >= 0)
+                    _PrepareWebsiteSave(web, {cookies_path}, {account_path}, start);
+                else
+                    start();
             }};
             if (IsHandleCreated)
                 BeginInvoke(go);
@@ -222,6 +273,44 @@ internal sealed class GameForm : Form
             }};
             hide.Start();
         }};
+    }}
+
+    void _ToggleFullScreen()
+    {{
+        int now = Environment.TickCount;
+        if (lastToggleTick != 0 && now - lastToggleTick < 350)
+            return;
+        lastToggleTick = now;
+        if (!fullScreen)
+        {{
+            windowedBounds = Bounds;
+            windowedState = WindowState;
+            windowedBorder = FormBorderStyle;
+            WindowState = FormWindowState.Normal;
+            FormBorderStyle = FormBorderStyle.None;
+            Bounds = Screen.FromControl(this).Bounds;
+            fullScreen = true;
+            return;
+        }}
+        FormBorderStyle = windowedBorder;
+        WindowState = windowedState;
+        Bounds = windowedBounds;
+        fullScreen = false;
+    }}
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {{
+        if (keyData == Keys.F11)
+        {{
+            _ToggleFullScreen();
+            return true;
+        }}
+        if (keyData == Keys.Escape && fullScreen)
+        {{
+            _ToggleFullScreen();
+            return true;
+        }}
+        return base.ProcessCmdKey(ref msg, keyData);
     }}
 
     static bool _IsOAuth(string uri)
@@ -243,10 +332,23 @@ internal sealed class GameForm : Form
                 return false;
             Uri parsed = new Uri(uri);
             string path = parsed.AbsolutePath ?? "";
-            int index = path.IndexOf("/g/", StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
+            int crazy = path.IndexOf("/game/", StringComparison.OrdinalIgnoreCase);
+            int poki = path.IndexOf("/g/", StringComparison.OrdinalIgnoreCase);
+            int index;
+            int skip;
+            if (crazy >= 0)
+            {{
+                index = crazy;
+                skip = 6;
+            }}
+            else if (poki >= 0)
+            {{
+                index = poki;
+                skip = 3;
+            }}
+            else
                 return false;
-            string rest = path.Substring(index + 3).Trim('/');
+            string rest = path.Substring(index + skip).Trim('/');
             if (rest.Length == 0)
                 return false;
             string other = rest.Split('/')[0];
@@ -440,6 +542,7 @@ def build_game_exe(
             account_path=_csharp_string(str(account_state_path())),
             adblock_list=_csharp_string(str(adblock_domains_path())),
             adblock_settings=_csharp_string(str(settings_path())),
+            fs_js=_csharp_string(FS_KEY_JS),
         ),
         encoding="utf-8",
     )
@@ -1140,6 +1243,10 @@ def build_pokiwrap_exe() -> Path | None:
                 "PyQt6.QtWebEngineWidgets",
                 "--hidden-import",
                 "PyQt6.QtWebEngineCore",
+                "--collect-submodules",
+                "PyQt6.QtWebEngineCore",
+                "--collect-submodules",
+                "PyQt6.QtWebEngineWidgets",
             ]
         )
         if entitlements.exists():

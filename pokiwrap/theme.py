@@ -87,6 +87,21 @@ QPushButton#primaryButton:hover {{
 QPushButton#primaryButton:pressed {{
     background: #6A48F0;
 }}
+QPushButton#chipButton {{
+    background: {CARD};
+    color: {MUTED};
+    border: 1px solid {BORDER};
+    padding: 7px 14px;
+}}
+QPushButton#chipButton:hover {{
+    background: {CARD_HOVER};
+    color: {TEXT};
+}}
+QPushButton#chipButton:checked {{
+    background: {ACCENT};
+    color: #FFFFFF;
+    border: 1px solid {ACCENT};
+}}
 QPushButton#ghostButton {{
     background: {CARD};
     color: {TEXT};

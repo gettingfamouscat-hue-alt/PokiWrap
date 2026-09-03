@@ -13,8 +13,15 @@ class FlowLayout(QLayout):
         self.setContentsMargins(0, 0, 0, 0)
         self.setSpacing(spacing)
 
-    def addItem(self, item: QLayoutItem) -> None:
-        self._items.append(item)
+    def clear(self) -> None:
+        while self.count():
+            item = self.takeAt(0)
+            if item is None:
+                break
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
 
     def count(self) -> int:
         return len(self._items)

@@ -19,8 +19,8 @@ CHROME_HIDE_JS = r"""
       return /ads\.poki|\/ads\/|housead|doubleclick|googlesyndication|imasdk|adnxs|prebid|amazon-adsystem|ay\.delivery|onetag-sys|youtube\.com\/embed/i.test(frameSrc(iframe));
     }
 
-  function isGameFrame(iframe) {
-    return /games\.poki\.com|poki-gdn\.com|gdn\.poki\.com|game-cdn\.poki|poki-cdn\.com\/game/i.test(frameSrc(iframe));
+    function isGameFrame(iframe) {
+    return /games\.poki\.com|poki-gdn\.com|gdn\.poki\.com|game-cdn\.poki|poki-cdn\.com\/game|games\.crazygames\.com|game-files\.crazygames\.com|files\.crazygames\.com/i.test(frameSrc(iframe));
   }
 
   function isHelperFrame(iframe) {
@@ -29,12 +29,14 @@ CHROME_HIDE_JS = r"""
     var src = frameSrc(iframe).trim();
     if (!src || /about:blank|javascript:/i.test(src)) return true;
     if (/\/ads\/|housead|\/vast/i.test(src)) return false;
-    return /poki\.com|poki\.io|poki-cdn|poki-gdn|poki-user-content|googleapis|gstatic|google|apple|microsoft|live\.com/i.test(src);
+    return /poki\.com|poki\.io|poki-cdn|poki-gdn|poki-user-content|crazygames\.com|googleapis|gstatic|google|apple|microsoft|live\.com/i.test(src);
   }
 
   function isWrongGame(iframe) {
     var src = frameSrc(iframe);
     var match = src.match(/poki\.com\/[^/]+\/g\/([^/?#]+)/i);
+    if (match && TARGET_SLUG && match[1].toLowerCase() !== TARGET_SLUG.toLowerCase()) return true;
+    match = src.match(/crazygames\.[^/]+\/(?:[a-z]{2}\/)?game\/([^/?#]+)/i);
     if (match && TARGET_SLUG && match[1].toLowerCase() !== TARGET_SLUG.toLowerCase()) return true;
     return false;
   }
@@ -59,7 +61,7 @@ CHROME_HIDE_JS = r"""
       if (isGameFrame(frames[i])) return frames[i];
     }
     var named = document.querySelector(
-      "[class*='GamePlayer'] iframe, [class*='game-player'] iframe, [class*='GameFrame'] iframe, [id*='game-container'] iframe, [data-testid*='game'] iframe"
+      "[class*='GamePlayer'] iframe, [class*='game-player'] iframe, [class*='GameFrame'] iframe, [id*='game-container'] iframe, [data-testid*='game'] iframe, #game-iframe, iframe#game, [class*='GameIframe'] iframe"
     );
     if (named && !isAdFrame(named)) return named;
     var best = null;
@@ -208,6 +210,11 @@ CHROME_HIDE_JS = r"""
         event.preventDefault();
         event.stopPropagation();
       }
+      match = href.match(/crazygames\.[^/]+\/(?:[a-z]{2}\/)?game\/([^/?#]+)/i);
+      if (match && TARGET_SLUG && match[1].toLowerCase() !== TARGET_SLUG.toLowerCase()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
       var label = (link.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
       if (label.indexOf("play it on poki") >= 0) {
         event.preventDefault();
@@ -236,6 +243,19 @@ AD_SKIP_JS = r"""
     sdk.destroyAd = function () {};
     sdk.isAdBlocked = function () { return true; };
   }
+  function stubCrazy() {
+    try {
+      window.CrazyGames = window.CrazyGames || {};
+      window.CrazyGames.SDK = window.CrazyGames.SDK || {};
+      var ad = window.CrazyGames.SDK.ad || {};
+      ad.requestAd = function (type, callbacks) {
+        try { if (callbacks && typeof callbacks.adFinished === "function") callbacks.adFinished(); } catch (e) {}
+      };
+      ad.happytime = function () {};
+      ad.hasAdblock = function (cb) { try { if (typeof cb === "function") cb(true); } catch (e) {} };
+      window.CrazyGames.SDK.ad = ad;
+    } catch (e) {}
+  }
   function hidePromo() {
     var nodes = document.querySelectorAll("a, button, [role='button']");
     for (var i = 0; i < nodes.length; i++) {
@@ -248,7 +268,7 @@ AD_SKIP_JS = r"""
     }
   }
   function tick() {
-    try { stubSdk(); hidePromo(); } catch (e) {}
+    try { stubSdk(); stubCrazy(); hidePromo(); } catch (e) {}
   }
   document.addEventListener("click", function (event) {
     var t = ((event.target && event.target.textContent) || "").toLowerCase();
@@ -262,12 +282,33 @@ AD_SKIP_JS = r"""
 })();
 """
 
+FS_KEY_JS = r"""
+(function () {
+  if (window.__pokiwrapFsKeys) return;
+  window.__pokiwrapFsKeys = true;
+  window.addEventListener("keydown", function (event) {
+    if (event.key !== "F11" && event.key !== "Escape") return;
+    if (event.key === "F11") {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    try {
+      if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+        window.chrome.webview.postMessage(event.key === "F11" ? "f11" : "esc");
+      }
+    } catch (err) {}
+  }, true);
+})();
+"""
+
 WRAPPER_TEMPLATE = r'''#!/usr/bin/env python3
 """PokiWrap generated desktop wrapper — __APP_NAME_TEXT__."""
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -276,14 +317,15 @@ os.environ.setdefault(
     "--autoplay-policy=no-user-gesture-required --disable-features=AudioServiceOutOfProcess",
 )
 
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtGui import QColor, QIcon, QPalette
+from PyQt6.QtCore import QEvent, Qt, QUrl
+from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineCore import (
     QWebEnginePage,
     QWebEngineProfile,
     QWebEngineScript,
     QWebEngineSettings,
+    QWebEngineUrlRequestInterceptor,
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
@@ -293,6 +335,7 @@ TARGET_SLUG = __TARGET_SLUG__
 PROFILE_NAME = __PROFILE_NAME__
 CHROME_HIDE_JS = __CHROME_HIDE_JS__
 AD_SKIP_JS = __AD_SKIP_JS__
+FS_KEY_JS = __FS_KEY_JS__
 
 
 def _shared_pokiwrap_profile() -> Path:
@@ -308,11 +351,127 @@ def _shared_pokiwrap_profile() -> Path:
     return path
 
 
+def _pokiwrap_data_dir() -> Path:
+    return _shared_pokiwrap_profile().parent
+
+
+def _adblock_enabled() -> bool:
+    path = _pokiwrap_data_dir() / "settings.json"
+    if not path.exists():
+        return True
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    return data.get("adblock", True) is not False
+
+
+def _host_is(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def _allowed_host(host: str) -> bool:
+    if _host_is(host, "ads.poki.com"):
+        return False
+    if _host_is(host, "ads.crazygames.com"):
+        return False
+    if any(
+        _host_is(host, domain)
+        for domain in (
+            "poki.com",
+            "poki.io",
+            "poki-cdn.com",
+            "poki-gdn.com",
+            "poki-user-content.com",
+            "crazygames.com",
+            "gstatic.com",
+            "googleapis.com",
+        )
+    ):
+        return True
+    if "firebase" in host:
+        return True
+    return host in {
+        "identitytoolkit.googleapis.com",
+        "securetoken.googleapis.com",
+        "accounts.google.com",
+        "appleid.apple.com",
+        "login.microsoftonline.com",
+        "login.live.com",
+    }
+
+
+def _is_ad_request(url: QUrl, blocked: set[str]) -> bool:
+    host = (url.host() or "").lower()
+    path = (url.path() or "").lower()
+    text = url.toString().lower()
+    if _host_is(host, "ads.poki.com") or _host_is(host, "ads.crazygames.com") or _host_is(host, "ay.delivery") or _host_is(host, "onetag-sys.com"):
+        return True
+    if "/ads/" in path or "housead" in path or "housead" in text:
+        return True
+    if "/vast" in path or path.endswith(".vast") or "ima3.js" in path or "prebid" in path:
+        return True
+    if _allowed_host(host):
+        return False
+    current = host
+    while current:
+        if current in blocked:
+            return True
+        if "." not in current:
+            break
+        current = current.split(".", 1)[1]
+    return False
+
+
+class AdInterceptor(QWebEngineUrlRequestInterceptor):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._hosts: set[str] = {
+            "ads.poki.com",
+            "doubleclick.net",
+            "googlesyndication.com",
+            "googleadservices.com",
+            "googletagmanager.com",
+            "google-analytics.com",
+            "imasdk.googleapis.com",
+            "amazon-adsystem.com",
+            "adnxs.com",
+            "ay.delivery",
+            "onetag-sys.com",
+        }
+        path = _pokiwrap_data_dir() / "adblock_domains.txt"
+        try:
+            if path.exists():
+                self._hosts.update(
+                    line.strip().lower()
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip() and not line.startswith("#")
+                )
+        except OSError:
+            pass
+
+    def interceptRequest(self, info) -> None:
+        if not _adblock_enabled():
+            return
+        try:
+            if _is_ad_request(info.requestUrl(), self._hosts):
+                info.block(True)
+        except Exception:
+            return
+
+
 def chrome_user_agent() -> str:
+    try:
+        raw = QWebEngineProfile.defaultProfile().httpUserAgent()
+        cleaned = re.sub(r"\s*QtWebEngine/[^\s]+", "", raw).strip()
+        if "Chrome/" in cleaned:
+            return cleaned
+    except Exception:
+        pass
     if sys.platform == "darwin":
         return (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
     if sys.platform == "win32":
         return (
@@ -365,10 +524,14 @@ class GamePage(QWebEnginePage):
                 slug = path.rstrip("/").split("/")[-1].lower()
                 if slug != TARGET_SLUG.lower():
                     return
+            if "crazygames" in host and TARGET_SLUG and "/game/" in path.lower():
+                slug = path.rstrip("/").split("/")[-1].lower()
+                if slug != TARGET_SLUG.lower():
+                    return
             if any(token in text for token in ("accounts.google", "appleid.apple", "login.live", "login.microsoftonline", "firebaseapp")):
                 self.setUrl(url)
                 return
-            if "poki.com" in host or "poki-gdn.com" in host or "poki-cdn.com" in host:
+            if "poki.com" in host or "poki-gdn.com" in host or "poki-cdn.com" in host or "crazygames.com" in host:
                 return
             self.setUrl(url)
 
@@ -384,6 +547,10 @@ class GamePage(QWebEnginePage):
                 slug = url.path().rstrip("/").split("/")[-1].lower()
                 if slug != TARGET_SLUG.lower():
                     return False
+            if TARGET_SLUG and "crazygames" in (url.host() or "").lower() and "/game/" in (url.path() or "").lower():
+                slug = url.path().rstrip("/").split("/")[-1].lower()
+                if slug != TARGET_SLUG.lower():
+                    return False
             return True
         host = (url.host() or "").lower()
         path = url.path() or ""
@@ -391,7 +558,21 @@ class GamePage(QWebEnginePage):
             slug = path.rstrip("/").split("/")[-1].lower()
             if slug != TARGET_SLUG.lower():
                 return False
+        if "crazygames" in host and TARGET_SLUG and "/game/" in path.lower():
+            slug = path.rstrip("/").split("/")[-1].lower()
+            if slug != TARGET_SLUG.lower():
+                return False
         return True
+
+
+class GameView(QWebEngineView):
+    def event(self, event):
+        if event.type() == QEvent.Type.ShortcutOverride:
+            key = event.key()
+            if key in (Qt.Key.Key_F11, Qt.Key.Key_Escape):
+                event.ignore()
+                return False
+        return super().event(event)
 
 
 class GameWindow(QMainWindow):
@@ -418,6 +599,8 @@ class GameWindow(QMainWindow):
         self._profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
         self._profile.setHttpUserAgent(chrome_user_agent())
         apply_browser_settings(self._profile.settings())
+        self._blocker = AdInterceptor(self)
+        self._profile.setUrlRequestInterceptor(self._blocker)
 
         hide = QWebEngineScript()
         hide.setName("pokiwrap-hide-chrome")
@@ -435,7 +618,26 @@ class GameWindow(QMainWindow):
         skip.setSourceCode(AD_SKIP_JS)
         self._profile.scripts().insert(skip)
 
-        self.view = QWebEngineView(self)
+        stealth = QWebEngineScript()
+        stealth.setName("pokiwrap-stealth")
+        stealth.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        stealth.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        stealth.setRunsOnSubFrames(True)
+        stealth.setSourceCode(
+            "(function(){try{Object.defineProperty(navigator,'webdriver',{get:function(){return undefined;}});}catch(e){}"
+            "try{window.chrome=window.chrome||{runtime:{}};}catch(e){}})();"
+        )
+        self._profile.scripts().insert(stealth)
+
+        keys = QWebEngineScript()
+        keys.setName("pokiwrap-fs-keys")
+        keys.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        keys.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        keys.setRunsOnSubFrames(True)
+        keys.setSourceCode(FS_KEY_JS)
+        self._profile.scripts().insert(keys)
+
+        self.view = GameView(self)
         page = GamePage(self._profile, self.view)
         self.view.setPage(page)
         page.fullScreenRequested.connect(self._on_fullscreen)
@@ -443,6 +645,14 @@ class GameWindow(QMainWindow):
         self.view.setUrl(QUrl(GAME_URL))
         self.setCentralWidget(self.view)
         self._center_on_screen()
+        self._fullscreen = False
+        f11 = QShortcut(QKeySequence("F11"), self)
+        f11.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        f11.activated.connect(self._toggle_fullscreen)
+        if sys.platform == "darwin":
+            mac = QShortcut(QKeySequence("Ctrl+Meta+F"), self)
+            mac.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            mac.activated.connect(self._toggle_fullscreen)
 
     def _center_on_screen(self) -> None:
         screen = self.screen() or QApplication.primaryScreen()
@@ -458,10 +668,36 @@ class GameWindow(QMainWindow):
             self.view.page().runJavaScript(CHROME_HIDE_JS)
 
     def _on_fullscreen(self, request) -> None:
+        on = True
+        try:
+            on = bool(request.toggleOn())
+        except Exception:
+            on = not self.isFullScreen()
         request.accept()
+        if on:
+            self.showFullScreen()
+            self._fullscreen = True
+        else:
+            self.showNormal()
+            self._fullscreen = False
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen() or self._fullscreen:
+            self.showNormal()
+            self._fullscreen = False
+            return
+        self.showFullScreen()
+        self._fullscreen = True
 
     def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_F11:
+            self._toggle_fullscreen()
+            return
         if event.key() == Qt.Key.Key_Escape:
+            if self.isFullScreen() or self._fullscreen:
+                self.showNormal()
+                self._fullscreen = False
+                return
             self.close()
             return
         super().keyPressEvent(event)

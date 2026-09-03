@@ -49,6 +49,10 @@ _GAMES_POKI = re.compile(
     r"https:(?:\\u002F|/)+(?:games\.poki\.com|[-a-z0-9.]+\.poki-gdn\.com)(?:\\u002F|/)[-A-Za-z0-9_./]+",
     re.I,
 )
+_GAMES_CRAZY = re.compile(
+    r"https:(?:\\u002F|/)+(?:games\.crazygames\.com|[-a-z0-9.]+\.game-files\.crazygames\.com)(?:\\u002F|/)[-A-Za-z0-9_./]+",
+    re.I,
+)
 
 
 @dataclass
@@ -101,7 +105,9 @@ def clean_title(title: str) -> str:
     text = unescape(re.sub(r"\s+", " ", title)).strip()
     text = re.sub(r"\s*[-–|]\s*Play Online.*$", "", text, flags=re.I)
     text = re.sub(r"\s*[-–|]\s*.*\bPoki\b.*$", "", text, flags=re.I)
-    return text.strip(" -|") or "Poki Game"
+    text = re.sub(r"\s*[-–|]\s*.*\bCrazyGames\b.*$", "", text, flags=re.I)
+    text = re.sub(r"\s*[-–|]\s*Play on CrazyGames.*$", "", text, flags=re.I)
+    return text.strip(" -|") or "Game"
 
 
 def _absolute(page_url: str, maybe: str | None) -> str | None:
@@ -203,11 +209,17 @@ def extract_artwork(html: str, page_url: str) -> PageArtwork:
     return PageArtwork(
         title=clean_title(title or ""),
         logo_url=_absolute(page_url, logo),
-        play_url=extract_play_url(html),
+        play_url=extract_play_url(html, page_url),
     )
 
 
-def extract_play_url(html: str) -> str | None:
+def extract_play_url(html: str, page_url: str = "") -> str | None:
+    host = urlparse(page_url).netloc.lower()
+    if "crazygames" in host:
+        found = _GAMES_CRAZY.findall(html)
+        if found:
+            return unescape(found[0]).replace("\\u002F", "/")
+        return None
     match = _FILE_CONTENT.search(html)
     if match:
         return unescape(match.group(1)).replace("\\u002F", "/")
@@ -221,7 +233,7 @@ def fetch_page_artwork(page_url: str) -> PageArtwork:
     html = fetch_text(page_url)
     artwork = extract_artwork(html, page_url)
     if not artwork.title:
-        artwork.title = "Poki Game"
+        artwork.title = "Game"
     return artwork
 
 

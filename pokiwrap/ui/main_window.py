@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         status = QStatusBar()
-        status.showMessage("Ready — wrappers open Poki in an isolated desktop window.")
+        status.showMessage("Ready — wrap Poki and CrazyGames titles as isolated desktop apps.")
         self.setStatusBar(status)
 
         self.sidebar.view_changed.connect(self._show_view)
@@ -90,9 +90,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Created {app.name}.{shortcut_note}", 6000)
         self.refresh_apps()
         if sys.platform == "darwin":
-            detail = f"{app.name} is on your Desktop. Open it to play — the game fills the window and skips the Poki site chrome."
+            detail = f"{app.name} is on your Desktop. Open it to play — the game fills the window."
         else:
-            detail = f"{app.name} is a native .exe on your Desktop with the game logo. The game fills the window and skips the Poki site chrome."
+            detail = f"{app.name} is a native .exe on your Desktop with the game logo. The game fills the window."
         QMessageBox.information(self, "App ready", detail)
 
     def _on_generate_failed(self, message: str) -> None:

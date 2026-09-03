@@ -1,4 +1,4 @@
-"""Copy Poki/Google session cookies from installed Chrome or Edge."""
+"""Copy Poki/Google session cookies from installed Chrome, Edge, or Brave."""
 
 from __future__ import annotations
 
@@ -7,8 +7,11 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
+from hashlib import pbkdf2_hmac
 from pathlib import Path
 
 from pokiwrap.paths import account_cookies_path
@@ -42,6 +45,18 @@ HOST_DENY = (
 )
 
 
+@dataclass
+class CookieRecord:
+    name: str
+    host: str
+    path: str
+    value: str
+    http_only: bool
+    secure: bool
+    expires: float
+    session: bool
+
+
 def _wanted_host(host: str) -> bool:
     text = (host or "").lower()
     if not text:
@@ -51,13 +66,22 @@ def _wanted_host(host: str) -> bool:
     return any(token in text for token in HOST_MARKERS)
 
 
-def _browser_roots() -> list[Path]:
+def _browser_roots() -> list[tuple[Path, tuple[str, str] | None]]:
+    if sys.platform == "darwin":
+        support = Path.home() / "Library" / "Application Support"
+        return [
+            (support / "Google" / "Chrome", ("Chrome Safe Storage", "Chrome")),
+            (support / "Google" / "Chrome Beta", ("Chrome Safe Storage", "Chrome")),
+            (support / "Microsoft Edge", ("Microsoft Edge Safe Storage", "Microsoft Edge")),
+            (support / "BraveSoftware" / "Brave-Browser", ("Brave Safe Storage", "Brave")),
+            (support / "Chromium", ("Chromium Safe Storage", "Chromium")),
+        ]
     local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
     return [
-        local / "Google" / "Chrome" / "User Data",
-        local / "Microsoft" / "Edge" / "User Data",
-        local / "BraveSoftware" / "Brave-Browser" / "User Data",
-        local / "Chromium" / "User Data",
+        (local / "Google" / "Chrome" / "User Data", None),
+        (local / "Microsoft" / "Edge" / "User Data", None),
+        (local / "BraveSoftware" / "Brave-Browser" / "User Data", None),
+        (local / "Chromium" / "User Data", None),
     ]
 
 
@@ -110,7 +134,7 @@ def _dpapi_decrypt(blob: bytes) -> bytes:
         ctypes.windll.kernel32.LocalFree(blob_out.pbData)
 
 
-def _master_key(root: Path) -> bytes | None:
+def _windows_master_key(root: Path) -> bytes | None:
     state = root / "Local State"
     if not state.exists():
         return None
@@ -129,6 +153,20 @@ def _master_key(root: Path) -> bytes | None:
         return None
 
 
+def _mac_master_key(service: str, account: str) -> bytes | None:
+    try:
+        raw = subprocess.check_output(
+            ["security", "find-generic-password", "-w", "-s", service, "-a", account],
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    password = raw.decode("utf-8", "replace").strip("\r\n")
+    if not password:
+        return None
+    return pbkdf2_hmac("sha1", password.encode("utf-8"), b"saltysalt", 1003, 16)
+
+
 def _decrypt_value(raw: bytes, key: bytes | None) -> str:
     if not raw:
         return ""
@@ -138,16 +176,29 @@ def _decrypt_value(raw: bytes, key: bytes | None) -> str:
 
             return AESGCM(key).decrypt(raw[3:15], raw[15:], None).decode("utf-8", "replace")
         except Exception:
+            pass
+        try:
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+            from cryptography.hazmat.primitives.padding import PKCS7
+
+            cipher = Cipher(algorithms.AES(key), modes.CBC(b" " * 16))
+            decryptor = cipher.decryptor()
+            padded = decryptor.update(raw[3:]) + decryptor.finalize()
+            unpadder = PKCS7(128).unpadder()
+            return (unpadder.update(padded) + unpadder.finalize()).decode("utf-8", "replace")
+        except Exception:
             return ""
     if raw.startswith(b"v20"):
         return ""
-    try:
-        return _dpapi_decrypt(raw).decode("utf-8", "replace")
-    except Exception:
+    if sys.platform == "win32":
         try:
-            return raw.decode("utf-8", "replace")
+            return _dpapi_decrypt(raw).decode("utf-8", "replace")
         except Exception:
-            return ""
+            pass
+    try:
+        return raw.decode("utf-8", "replace")
+    except Exception:
+        return ""
 
 
 def _chrome_expiry_to_unix(value: int) -> float:
@@ -208,14 +259,51 @@ def _read_profile(root: Path, profile: Path, key: bytes | None) -> dict[str, str
     return seen
 
 
+def parse_cookie_file(path: Path | None = None) -> list[CookieRecord]:
+    file_path = path or account_cookies_path()
+    if not file_path.exists():
+        return []
+    records: list[CookieRecord] = []
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 8:
+            continue
+        try:
+            value = base64.b64decode(parts[7]).decode("utf-8", "replace")
+        except Exception:
+            value = parts[7]
+        records.append(
+            CookieRecord(
+                name=parts[0],
+                host=parts[1],
+                path=parts[2] or "/",
+                value=value,
+                http_only=parts[3] == "1",
+                secure=parts[4] == "1",
+                expires=float(parts[6] or 0),
+                session=parts[5] == "1",
+            )
+        )
+    return records
+
+
 def export_browser_cookies() -> int:
-    if sys.platform != "win32":
+    if sys.platform not in {"win32", "darwin"}:
         return 0
     collected: dict[str, str] = {}
-    for root in _browser_roots():
+    for root, keychain in _browser_roots():
         if not root.is_dir():
             continue
-        key = _master_key(root)
+        if sys.platform == "darwin" and keychain:
+            key = _mac_master_key(keychain[0], keychain[1])
+        elif sys.platform == "win32":
+            key = _windows_master_key(root)
+        else:
+            key = None
         for profile in _profile_dirs(root):
             collected.update(_read_profile(root, profile, key))
     path = account_cookies_path()

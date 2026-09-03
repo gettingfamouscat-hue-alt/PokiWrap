@@ -84,9 +84,8 @@ class AccountView(QWidget):
         card_layout.addWidget(adblock_hint)
 
         note = QLabel(
-            "Use the same Poki account as on poki.com. PokiWrap then pulls that account's cloud save "
-            "and ignores extra progress that only existed inside the wrapper. Close game windows, "
-            "click Connect, then open the game."
+            "Use the same Poki account as on poki.com. On a Mac, Google often blocks the in-app window — "
+            "sign in with Chrome, then click Import from Chrome. Close game windows first, then Connect."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #6E7384; font-size: 12px;")

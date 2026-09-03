@@ -80,6 +80,8 @@ internal static class AdBlock
         if (HostIs(host, "poki.com") || HostIs(host, "poki.io") || HostIs(host, "poki-cdn.com")
             || HostIs(host, "poki-gdn.com") || HostIs(host, "poki-user-content.com"))
             return true;
+        if (HostIs(host, "crazygames.com") && !HostIs(host, "ads.crazygames.com"))
+            return true;
         if (host.Contains("firebase"))
             return true;
         if (host == "identitytoolkit.googleapis.com" || host == "securetoken.googleapis.com")
@@ -102,7 +104,7 @@ internal static class AdBlock
         string host = parsed.Host.ToLowerInvariant();
         string path = (parsed.AbsolutePath ?? "").ToLowerInvariant();
         string query = (parsed.Query ?? "").ToLowerInvariant();
-        if (HostIs(host, "ads.poki.com") || HostIs(host, "ay.delivery") || HostIs(host, "onetag-sys.com"))
+        if (HostIs(host, "ads.poki.com") || HostIs(host, "ads.crazygames.com") || HostIs(host, "ay.delivery") || HostIs(host, "onetag-sys.com"))
             return true;
         if (path.IndexOf("/ads/") >= 0)
             return true;

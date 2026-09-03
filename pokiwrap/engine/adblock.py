@@ -110,10 +110,18 @@ PROTECTED = {
     "microsoft.com",
     "live.com",
     "apple.com",
+    "crazygames.com",
+    "www.crazygames.com",
+    "games.crazygames.com",
+    "imgs.crazygames.com",
+    "files.crazygames.com",
+    "game-files.crazygames.com",
 }
 
 def _is_protected(host: str) -> bool:
     if host == "ads.poki.com" or host.endswith(".ads.poki.com"):
+        return False
+    if host == "ads.crazygames.com" or host.endswith(".ads.crazygames.com"):
         return False
     if host in PROTECTED:
         return True

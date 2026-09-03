@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from pokiwrap.catalog import CatalogGame
+from pokiwrap.catalog import CatalogGame, catalog_cache_is_fresh, fetch_remote_catalog, load_cached_catalog
 from pokiwrap.engine.artwork import fetch_logo_bytes, fetch_page_artwork
 from pokiwrap.engine.generator import generate_app, game_slug_from_url
 from pokiwrap.paths import catalog_cache_dir
@@ -54,25 +54,49 @@ class PagePreviewWorker(QThread):
         self.ready.emit(self._url, title, logo)
 
 
+class CatalogFetchWorker(QThread):
+    ready = pyqtSignal(object)
+
+    def run(self) -> None:
+        cached = load_cached_catalog()
+        if cached:
+            self.ready.emit(cached)
+        if self.isInterruptionRequested():
+            return
+        if catalog_cache_is_fresh() and len(cached) > 200:
+            return
+        try:
+            games = fetch_remote_catalog()
+        except Exception:
+            return
+        if not self.isInterruptionRequested() and games:
+            self.ready.emit(games)
+
+
 class CatalogLogoWorker(QThread):
     logo_ready = pyqtSignal(str, bytes)
 
-    def __init__(self, games: tuple[CatalogGame, ...], parent=None) -> None:
+    def __init__(self, games: list[CatalogGame], parent=None) -> None:
         super().__init__(parent)
-        self._games = games
+        self._games = list(games)
 
     def run(self) -> None:
         cache = catalog_cache_dir()
         for game in self._games:
-            cached = cache / f"{slugify_cache(game.title)}.img"
+            if self.isInterruptionRequested():
+                return
+            cached = cache / f"{slugify_cache(game.source + '_' + game.title)}.img"
             if cached.exists() and cached.stat().st_size > 0:
                 self.logo_ready.emit(game.url, cached.read_bytes())
                 continue
             try:
-                artwork = fetch_page_artwork(game.url)
-                if not artwork.logo_url:
+                logo_url = game.logo_url
+                if not logo_url:
+                    artwork = fetch_page_artwork(game.url)
+                    logo_url = artwork.logo_url
+                if not logo_url:
                     continue
-                data = fetch_logo_bytes(artwork.logo_url, game.url)
+                data = fetch_logo_bytes(logo_url, game.url)
                 if not data:
                     continue
                 cached.write_bytes(data)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -12,11 +13,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from pokiwrap.catalog import GAMES
-from pokiwrap.engine.generator import game_slug_from_url, is_valid_http_url
-from pokiwrap.engine.workers import CatalogLogoWorker, PagePreviewWorker
+from pokiwrap.catalog import GAMES, catalog_counts, filter_catalog, load_cached_catalog
+from pokiwrap.engine.generator import game_slug_from_url, is_valid_http_url, normalize_game_url
+from pokiwrap.engine.workers import CatalogFetchWorker, CatalogLogoWorker, PagePreviewWorker
 from pokiwrap.ui.flow_layout import FlowLayout
 from pokiwrap.ui.game_card import GameCard, rounded_logo
+
+MAX_VISIBLE = 72
 
 
 class _CatalogGrid(QWidget):
@@ -26,6 +29,9 @@ class _CatalogGrid(QWidget):
 
     def add_card(self, card: GameCard) -> None:
         self._flow.addWidget(card)
+
+    def clear_cards(self) -> None:
+        self._flow.clear()
 
     def hasHeightForWidth(self) -> bool:
         return True
@@ -45,12 +51,17 @@ class DiscoverView(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._cards: dict[str, GameCard] = {}
+        self._games = list(load_cached_catalog() or GAMES)
+        self._source = "all"
         self._preview_worker: PagePreviewWorker | None = None
         self._logo_worker: CatalogLogoWorker | None = None
+        self._catalog_worker: CatalogFetchWorker | None = None
 
         title = QLabel("Discover Games")
         title.setObjectName("title")
-        subtitle = QLabel("Wrap any Poki title as a lightweight desktop app. Games stream from Poki — no files are downloaded.")
+        subtitle = QLabel(
+            "Wrap Poki and CrazyGames titles as desktop apps. Games stream from the site — no files are downloaded."
+        )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
 
@@ -63,7 +74,9 @@ class DiscoverView(QWidget):
         self.logo_preview.setText("★")
 
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Paste any Poki game URL…  e.g. https://poki.com/en/g/subway-surfers")
+        self.url_input.setPlaceholderText(
+            "Paste a Poki or CrazyGames URL…  e.g. https://www.crazygames.com/game/shell-shockers"
+        )
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("App name (auto-detected)")
         self.name_input.setFixedWidth(200)
@@ -92,22 +105,44 @@ class DiscoverView(QWidget):
         form_layout.addWidget(self.name_input)
         form_layout.addWidget(self.generate_btn)
 
-        catalog_label = QLabel("Popular on Poki")
-        catalog_label.setStyleSheet("font-size: 15px; font-weight: 700; padding-top: 8px;")
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search all games…")
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(180)
+        self._search_timer.timeout.connect(self._render_catalog)
+        self.search_input.textChanged.connect(lambda: self._search_timer.start())
 
-        cards = _CatalogGrid()
-        for game in GAMES:
-            card = GameCard(game)
-            card.download_requested.connect(self.catalog_requested.emit)
-            cards.add_card(card)
-            self._cards[game.url] = card
+        filters = QHBoxLayout()
+        filters.setSpacing(8)
+        self._source_group = QButtonGroup(self)
+        self._source_group.setExclusive(True)
+        for key, label in (("all", "All"), ("poki", "Poki"), ("crazygames", "CrazyGames")):
+            button = QPushButton(label)
+            button.setObjectName("chipButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setProperty("source", key)
+            if key == "all":
+                button.setChecked(True)
+            self._source_group.addButton(button)
+            filters.addWidget(button)
+        filters.addStretch()
+        self._source_group.buttonClicked.connect(self._on_source_clicked)
 
+        self.catalog_label = QLabel()
+        self.catalog_label.setStyleSheet("font-size: 15px; font-weight: 700; padding-top: 8px;")
+        self.catalog_meta = QLabel()
+        self.catalog_meta.setObjectName("subtitle")
+        self.catalog_meta.setWordWrap(True)
+
+        self._cards_grid = _CatalogGrid()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(cards)
+        scroll.setWidget(self._cards_grid)
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
-        cards.setStyleSheet("background: transparent;")
+        self._cards_grid.setStyleSheet("background: transparent;")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 24, 16)
@@ -115,15 +150,71 @@ class DiscoverView(QWidget):
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addWidget(form)
-        layout.addWidget(catalog_label)
+        layout.addWidget(self.search_input)
+        layout.addLayout(filters)
+        layout.addWidget(self.catalog_label)
+        layout.addWidget(self.catalog_meta)
         layout.addWidget(scroll, 1)
 
-        self._logo_worker = CatalogLogoWorker(GAMES, self)
+        self._render_catalog()
+        self._catalog_worker = CatalogFetchWorker(self)
+        self._catalog_worker.ready.connect(self._on_catalog_ready)
+        self._catalog_worker.start()
+
+    def _on_source_clicked(self, button: QPushButton) -> None:
+        self._source = str(button.property("source") or "all")
+        self._render_catalog()
+
+    def _on_catalog_ready(self, games) -> None:
+        if not games:
+            return
+        self._games = list(games)
+        self._render_catalog()
+
+    def _render_catalog(self) -> None:
+        query = self.search_input.text().strip()
+        visible = filter_catalog(self._games, query, self._source, MAX_VISIBLE)
+        poki_count, crazy_count = catalog_counts(self._games)
+        source_total = {
+            "poki": poki_count,
+            "crazygames": crazy_count,
+            "all": poki_count + crazy_count,
+        }.get(self._source, poki_count + crazy_count)
+        if self._source == "crazygames":
+            heading = "CrazyGames"
+        elif self._source == "poki":
+            heading = "Poki"
+        else:
+            heading = "Poki + CrazyGames"
+        self.catalog_label.setText(heading)
+        if query:
+            self.catalog_meta.setText(
+                f"Showing {len(visible)} match{'es' if len(visible) != 1 else ''} — {poki_count:,} Poki · {crazy_count:,} CrazyGames in the catalog."
+            )
+        else:
+            extra = ""
+            if source_total > len(visible):
+                extra = f" Showing {len(visible)} of {source_total:,}. Search to find any title."
+            self.catalog_meta.setText(
+                f"{poki_count:,} Poki games · {crazy_count:,} CrazyGames.{extra}"
+            )
+
+        self._cards_grid.clear_cards()
+        self._cards = {}
+        for game in visible:
+            card = GameCard(game)
+            card.download_requested.connect(self.catalog_requested.emit)
+            self._cards_grid.add_card(card)
+            self._cards[game.url] = card
+        if self._logo_worker is not None:
+            self._logo_worker.requestInterruption()
+        self._logo_worker = CatalogLogoWorker(visible, self)
         self._logo_worker.logo_ready.connect(self._on_catalog_logo)
         self._logo_worker.start()
 
     def _emit_manual(self) -> None:
-        self.generate_requested.emit(self.name_input.text(), self.url_input.text(), "#7C5CFF")
+        url = normalize_game_url(self.url_input.text())
+        self.generate_requested.emit(self.name_input.text(), url, "#7C5CFF")
 
     def clear_manual_form(self) -> None:
         self.url_input.clear()
@@ -136,7 +227,7 @@ class DiscoverView(QWidget):
         self.generate_btn.setText("Detecting logo…" if busy else "Generate App Shortcut")
 
     def _preview_from_url(self) -> None:
-        url = self.url_input.text().strip()
+        url = normalize_game_url(self.url_input.text())
         if not is_valid_http_url(url):
             return
         if not self.name_input.text().strip():
@@ -151,12 +242,13 @@ class DiscoverView(QWidget):
         self._preview_worker = worker
 
     def _on_preview(self, url: str, title: str, logo: bytes) -> None:
-        if url.strip() != self.url_input.text().strip():
+        current = normalize_game_url(self.url_input.text())
+        if url.strip() != current.strip():
             return
         if title:
-            current = self.name_input.text().strip()
+            typed = self.name_input.text().strip()
             slug_guess = game_slug_from_url(url).replace("-", " ").replace("_", " ").title()
-            if not current or current == slug_guess:
+            if not typed or typed == slug_guess:
                 self.name_input.setText(title)
         if logo:
             pixmap = rounded_logo(logo, 40, 10)

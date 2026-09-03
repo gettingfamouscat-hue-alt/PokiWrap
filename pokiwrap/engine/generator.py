@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from pokiwrap.engine.artwork import fetch_logo_bytes, fetch_page_artwork
 from pokiwrap.engine.exe import build_game_exe, publish_desktop_exe
 from pokiwrap.engine.icons import render_fallback_icon, save_square_logo
 from pokiwrap.engine.shortcut import create_desktop_shortcut
-from pokiwrap.engine.template import AD_SKIP_JS, CHROME_HIDE_JS, WRAPPER_TEMPLATE
+from pokiwrap.engine.template import AD_SKIP_JS, CHROME_HIDE_JS, FS_KEY_JS, WRAPPER_TEMPLATE
 from pokiwrap.paths import generated_app_roots, generated_apps_dir
 
 
@@ -50,9 +51,68 @@ def slugify(name: str) -> str:
     return slug or "poki_game"
 
 
+def _host(url: str) -> str:
+    return urlparse(url).netloc.lower().removeprefix("www.")
+
+
+def is_poki_url(url: str) -> bool:
+    host = _host(url)
+    return host == "poki.com" or host.endswith(".poki.com")
+
+
+def is_crazygames_url(url: str) -> bool:
+    host = _host(url)
+    return host == "crazygames.com" or host.endswith(".crazygames.com") or host.startswith("crazygames.")
+
+
+def is_supported_game_url(url: str) -> bool:
+    return is_poki_url(url) or is_crazygames_url(url)
+
+
 def is_valid_http_url(url: str) -> bool:
     parsed = urlparse(url.strip())
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def normalize_game_url(url: str) -> str:
+    text = url.strip()
+    if text and "://" not in text:
+        text = "https://" + text
+    parsed = urlparse(text)
+    if not parsed.netloc:
+        return text
+    path = parsed.path or "/"
+    parts = [part for part in path.split("/") if part]
+    slug = ""
+    if "g" in parts:
+        index = parts.index("g")
+        if index + 1 < len(parts):
+            slug = parts[index + 1]
+    if not slug and "game" in parts:
+        index = parts.index("game")
+        if index + 1 < len(parts):
+            slug = parts[index + 1]
+    if is_poki_url(text) and slug:
+        lang = parts[0] if parts and len(parts[0]) <= 3 else "en"
+        if lang == "g":
+            lang = "en"
+        return f"https://poki.com/{lang}/g/{slug}"
+    if is_crazygames_url(text) and slug:
+        return f"https://www.crazygames.com/game/{slug}"
+    return text
+
+
+def game_slug_from_url(url: str) -> str:
+    path = urlparse(url).path.rstrip("/").split("/")
+    if "g" in path:
+        index = path.index("g")
+        if index + 1 < len(path):
+            return path[index + 1]
+    if "game" in path:
+        index = path.index("game")
+        if index + 1 < len(path):
+            return path[index + 1]
+    return slugify(url)
 
 
 def _unique_folder(base: Path, slug: str) -> Path:
@@ -73,15 +133,6 @@ def _initials(name: str) -> str:
     return (parts[0][0] + parts[1][0]).upper()
 
 
-def game_slug_from_url(url: str) -> str:
-    path = urlparse(url).path.rstrip("/").split("/")
-    if "g" in path:
-        index = path.index("g")
-        if index + 1 < len(path):
-            return path[index + 1]
-    return slugify(url)
-
-
 def write_wrapper_script(script_path: Path, name: str, url: str) -> None:
     slug = game_slug_from_url(url)
     js = CHROME_HIDE_JS.replace("__TARGET_SLUG__", slug)
@@ -92,6 +143,7 @@ def write_wrapper_script(script_path: Path, name: str, url: str) -> None:
         .replace("__PROFILE_NAME__", repr(f"pokiwrap_{slug.replace('-', '_')}"))
         .replace("__CHROME_HIDE_JS__", repr(js))
         .replace("__AD_SKIP_JS__", repr(AD_SKIP_JS))
+        .replace("__FS_KEY_JS__", repr(FS_KEY_JS))
         .replace("__TARGET_SLUG__", repr(slug)),
         encoding="utf-8",
         newline="\n",
@@ -139,12 +191,18 @@ def rewrite_existing_wrappers() -> int:
             icon = folder / "icon.png"
         try:
             exe_path = build_game_exe(name, folder, icon if icon.exists() else None, play_url, url)
+            data["play_url"] = play_url
             if exe_path:
                 desktop = publish_desktop_exe(exe_path, name)
                 data["exe"] = str(exe_path)
-                data["play_url"] = play_url
                 data["shortcut"] = str(desktop)
-                meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            elif sys.platform == "darwin":
+                desktop = create_desktop_shortcut(
+                    name, script_path, icon if icon.exists() else None
+                )
+                if desktop:
+                    data["shortcut"] = str(desktop)
+            meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
             pass
         count += 1
@@ -160,9 +218,11 @@ def _write_icon(folder: Path, name: str, accent: str, logo_bytes: bytes | None) 
 
 
 def generate_app(name: str, url: str, accent: str = "#7C5CFF") -> GeneratedApp:
-    clean_url = url.strip()
+    clean_url = normalize_game_url(url)
     if not is_valid_http_url(clean_url):
-        raise ValueError("Enter a valid http(s) game URL.")
+        raise ValueError("Enter a valid Poki or CrazyGames http(s) game URL.")
+    if not is_supported_game_url(clean_url):
+        raise ValueError("Paste a Poki or CrazyGames game link, e.g. https://poki.com/en/g/subway-surfers or https://www.crazygames.com/game/shell-shockers.")
 
     artwork = None
     logo_bytes = None
@@ -177,7 +237,7 @@ def generate_app(name: str, url: str, accent: str = "#7C5CFF") -> GeneratedApp:
     if not clean_name:
         clean_name = artwork.title if artwork and artwork.title else ""
     if not clean_name:
-        raise ValueError("Enter an app name, or use a Poki URL so the title can be detected.")
+        raise ValueError("Enter an app name, or paste a Poki/CrazyGames URL so the title can be detected.")
 
     folder = _unique_folder(generated_apps_dir(), slugify(clean_name))
     folder.mkdir(parents=True, exist_ok=True)
@@ -186,7 +246,9 @@ def generate_app(name: str, url: str, accent: str = "#7C5CFF") -> GeneratedApp:
     write_wrapper_script(script_path, clean_name, clean_url)
 
     icon_path = _write_icon(folder, clean_name, accent, logo_bytes)
-    play_url = (artwork.play_url if artwork else None) or clean_url
+    play_url = clean_url
+    if artwork and artwork.play_url and is_poki_url(clean_url):
+        play_url = artwork.play_url
     exe_path = None
     try:
         exe_path = build_game_exe(clean_name, folder, icon_path, play_url, clean_url)
