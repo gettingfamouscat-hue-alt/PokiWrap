@@ -20,7 +20,46 @@ CHROME_HIDE_JS = r"""
     }
 
     function isGameFrame(iframe) {
-    return /games\.poki\.com|poki-gdn\.com|gdn\.poki\.com|game-cdn\.poki|poki-cdn\.com\/game|games\.crazygames\.com|game-files\.crazygames\.com|files\.crazygames\.com/i.test(frameSrc(iframe));
+    return /games\.poki\.com|poki-gdn\.com|gdn\.poki\.com|game-cdn\.poki|poki-cdn\.com\/game|games\.crazygames\.com|game-files\.crazygames\.com|files\.crazygames\.com|crazygames\.com\/embed/i.test(frameSrc(iframe));
+  }
+
+  function isProbeFrame(iframe) {
+    if (!iframe) return true;
+    if (iframe.srcdoc && String(iframe.srcdoc).length < 32) return true;
+    var src = frameSrc(iframe);
+    if (/srcdoc/i.test(src) && !isGameFrame(iframe)) return true;
+    var w = Math.max(iframe.clientWidth || 0, iframe.offsetWidth || 0);
+    var h = Math.max(iframe.clientHeight || 0, iframe.offsetHeight || 0);
+    if (w * h > 0 && w * h < 10000) return true;
+    return false;
+  }
+
+  function ancestorText(iframe) {
+    var text = "";
+    var el = iframe;
+    for (var i = 0; i < 10 && el; i++) {
+      var cls = "";
+      try {
+        cls = el.className && el.className.baseVal != null ? el.className.baseVal : String(el.className || "");
+      } catch (err) {}
+      text += " " + cls + " " + (el.id || "");
+      try { text += " " + (el.getAttribute("data-testid") || ""); } catch (err2) {}
+      el = el.parentElement;
+    }
+    return text;
+  }
+
+  function isPlayerShell(iframe) {
+    if (!iframe || isAdFrame(iframe) || isWrongGame(iframe) || isAuthFrame(iframe) || isProbeFrame(iframe)) return false;
+    return /GamePlayer|game-player|GameFrame|game-container|GameIframe|game-iframe|gameFrame/i.test(ancestorText(iframe));
+  }
+
+  function looksLikePlayer(iframe) {
+    if (!iframe || isAdFrame(iframe) || isWrongGame(iframe) || isAuthFrame(iframe) || isProbeFrame(iframe)) return false;
+    if (isGameFrame(iframe) || isPlayerShell(iframe)) return true;
+    var allow = (iframe.getAttribute("allow") || "") + (iframe.allowFullscreen ? " fullscreen" : "");
+    var area = Math.max(iframe.clientWidth || 0, 0) * Math.max(iframe.clientHeight || 0, 0);
+    return /fullscreen/i.test(allow) && area >= 40000;
   }
 
   function isHelperFrame(iframe) {
@@ -57,10 +96,44 @@ CHROME_HIDE_JS = r"""
     var frames = allIframes(document);
     var i;
     for (i = 0; i < frames.length; i++) {
-      if (isWrongGame(frames[i]) || isAdFrame(frames[i])) continue;
+      if (isWrongGame(frames[i]) || isAdFrame(frames[i]) || isProbeFrame(frames[i])) continue;
       if (isGameFrame(frames[i])) return frames[i];
     }
-    return null;
+    for (i = 0; i < frames.length; i++) {
+      if (isPlayerShell(frames[i])) return frames[i];
+    }
+    var named = document.querySelector(
+      "[class*='GamePlayer'] iframe, [class*='game-player'] iframe, [class*='GameFrame'] iframe, [id*='game-container'] iframe, [data-testid*='game'] iframe, #game-iframe, iframe#game, [class*='GameIframe'] iframe"
+    );
+    if (named && looksLikePlayer(named)) return named;
+    var best = null;
+    var bestArea = 0;
+    for (i = 0; i < frames.length; i++) {
+      if (!looksLikePlayer(frames[i])) continue;
+      var area = Math.max(frames[i].clientWidth, 0) * Math.max(frames[i].clientHeight, 0);
+      if (area > bestArea) {
+        bestArea = area;
+        best = frames[i];
+      }
+    }
+    return best;
+  }
+
+  function pickPlayerBox() {
+    var nodes = document.querySelectorAll("[class*='GamePlayer'], [class*='game-player'], [id*='game-container'], [class*='GameFrame']");
+    var best = null;
+    var bestScore = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var cls = String(nodes[i].className || "") + " " + (nodes[i].id || "");
+      if (/GamePlayerButton|GameBarButton/i.test(cls)) continue;
+      var area = Math.max(nodes[i].clientWidth, 0) * Math.max(nodes[i].clientHeight, 0);
+      var score = area + (nodes[i].querySelector && nodes[i].querySelector("iframe") ? 1000000 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = nodes[i];
+      }
+    }
+    return best;
   }
 
   function unfillOthers(game) {
@@ -78,15 +151,18 @@ CHROME_HIDE_JS = r"""
       style.id = "pokiwrap-chrome-hide";
       (document.head || document.documentElement).appendChild(style);
     }
-    var ready = !!pickGame();
+    var game = pickGame();
+    var box = pickPlayerBox();
+    var ready = !!(game || box);
     var css = [
       "html,body{margin:0!important;padding:0!important;width:100%!important;height:100%!important;background:#0F1117!important;}",
-      "iframe[src*='doubleclick'],iframe[src*='googlesyndication'],iframe[src*='ads.poki'],iframe[src*='/ads/'],iframe[src*='housead'],iframe[src*='imasdk'],iframe[src*='amazon-adsystem'],ins.adsbygoogle,[id*='google_ads'],[class*='ad-slot'],[class*='AdSlot'],[class*='HouseAd'],[class*='CommercialBreak']{display:none!important;visibility:hidden!important;pointer-events:none!important;width:0!important;height:0!important;}"
+      "iframe[srcdoc],iframe[src*='doubleclick'],iframe[src*='googlesyndication'],iframe[src*='ads.poki'],iframe[src*='/ads/'],iframe[src*='housead'],iframe[src*='imasdk'],iframe[src*='amazon-adsystem'],ins.adsbygoogle,[id*='google_ads'],[class*='ad-slot'],[class*='AdSlot'],[class*='HouseAd'],[class*='CommercialBreak']{display:none!important;visibility:hidden!important;pointer-events:none!important;width:0!important;height:0!important;}"
     ];
     if (ready) {
       css.push("html,body{overflow:hidden!important;background:#000!important;}");
-      css.push("header,nav,footer,[role='banner'],[role='navigation'],[class*='PageHeader'],[class*='page-header'],[class*='NavBar'],[class*='Navbar'],[class*='GamesBar'],[class*='GameBar']:not([class*='GamePlayer']),[class*='BottomBar'],[class*='Advertisement']{display:none!important;visibility:hidden!important;pointer-events:none!important;}");
-      css.push("iframe.pokiwrap-game{position:fixed!important;inset:0!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;min-width:100vw!important;min-height:100vh!important;max-width:none!important;max-height:none!important;border:0!important;margin:0!important;padding:0!important;z-index:2147483647!important;background:#000!important;display:block!important;visibility:visible!important;opacity:1!important;transform:none!important;clip:auto!important;clip-path:none!important;}");
+      css.push("header,nav,footer,[role='banner'],[role='navigation'],[class*='PageHeader'],[class*='page-header'],[class*='NavBar'],[class*='Navbar'],[class*='TopBar'],[class*='top-bar'],[class*='GamesBar'],[class*='GameBar']:not([class*='GamePlayer']),[class*='BottomBar'],[class*='Sidebar'],[class*='RightRail'],[class*='Advertisement']{display:none!important;visibility:hidden!important;pointer-events:none!important;}");
+      css.push(".pokiwrap-game-box,[class*='GamePlayer'].pokiwrap-game-box{position:fixed!important;inset:0!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;z-index:2147483646!important;background:transparent!important;display:block!important;visibility:visible!important;overflow:hidden!important;}");
+      css.push("iframe.pokiwrap-game{position:fixed!important;inset:0!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;min-width:100vw!important;min-height:100vh!important;max-width:none!important;max-height:none!important;border:0!important;margin:0!important;padding:0!important;z-index:2147483647!important;background:transparent!important;display:block!important;visibility:visible!important;opacity:1!important;transform:none!important;clip:auto!important;clip-path:none!important;}");
     }
     style.textContent = css.join("");
   }
@@ -130,8 +206,32 @@ CHROME_HIDE_JS = r"""
     }
   }
 
+    function fillBox(box) {
+    if (!box) return;
+    box.classList.add("pokiwrap-game-box");
+    var props = {
+      position: "fixed",
+      left: "0",
+      top: "0",
+      right: "0",
+      bottom: "0",
+      width: "100vw",
+      height: "100vh",
+      "max-width": "none",
+      "max-height": "none",
+      margin: "0",
+      padding: "0",
+      overflow: "hidden",
+      "z-index": "2147483646",
+      background: "transparent"
+    };
+    for (var key in props) {
+      if (props.hasOwnProperty(key)) box.style.setProperty(key, props[key], "important");
+    }
+  }
+
     function fill(el) {
-    if (!el || !isGameFrame(el)) return false;
+    if (!el || !looksLikePlayer(el)) return false;
     unfillOthers(el);
     el.classList.add("pokiwrap-game");
     el.setAttribute("name", "gameFrame");
@@ -154,7 +254,7 @@ CHROME_HIDE_JS = r"""
       margin: "0",
       padding: "0",
       "z-index": "2147483647",
-      background: "#000",
+      background: "transparent",
       display: "block",
       visibility: "visible",
       opacity: "1",
@@ -189,6 +289,7 @@ CHROME_HIDE_JS = r"""
       ensureStyle();
       clickAccept();
       hidePromo();
+      fillBox(pickPlayerBox());
       var game = pickGame();
       if (!fill(game)) return;
       if (!window.__pokiwrapReady) {
@@ -691,10 +792,9 @@ class GameWindow(QMainWindow):
     def _on_loaded(self, ok: bool) -> None:
         if ok:
             self.view.page().runJavaScript(CHROME_HIDE_JS)
-        if sys.platform == "darwin":
-            size = self.size()
-            self.resize(size.width() + 1, size.height())
-            QTimer.singleShot(50, lambda: self.resize(size))
+        if sys.platform == "darwin" and not self.isFullScreen() and not getattr(self, "_fullscreen", False):
+            self.view.update()
+            QTimer.singleShot(50, self.view.repaint)
 
     def _on_fullscreen(self, request) -> None:
         on = True
