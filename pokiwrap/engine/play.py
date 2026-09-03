@@ -10,7 +10,10 @@ from pathlib import Path
 
 def configure_webengine_env() -> None:
     os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
-    extra = "--no-sandbox --disable-gpu-sandbox --autoplay-policy=no-user-gesture-required"
+    extra = (
+        "--no-sandbox --disable-gpu-sandbox --autoplay-policy=no-user-gesture-required "
+        "--ignore-gpu-blocklist --enable-webgl"
+    )
     current = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{current} {extra}".strip()
     if sys.platform == "darwin":

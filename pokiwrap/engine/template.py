@@ -60,22 +60,15 @@ CHROME_HIDE_JS = r"""
       if (isWrongGame(frames[i]) || isAdFrame(frames[i])) continue;
       if (isGameFrame(frames[i])) return frames[i];
     }
-    var named = document.querySelector(
-      "[class*='GamePlayer'] iframe, [class*='game-player'] iframe, [class*='GameFrame'] iframe, [id*='game-container'] iframe, [data-testid*='game'] iframe, #game-iframe, iframe#game, [class*='GameIframe'] iframe"
-    );
-    if (named && !isAdFrame(named)) return named;
-    var best = null;
-    var bestArea = 0;
-    for (i = 0; i < frames.length; i++) {
-      if (isAdFrame(frames[i]) || isWrongGame(frames[i])) continue;
-      var area = Math.max(frames[i].clientWidth, 0) * Math.max(frames[i].clientHeight, 0);
-      if (area > bestArea) {
-        bestArea = area;
-        best = frames[i];
-      }
+    return null;
+  }
+
+  function unfillOthers(game) {
+    var frames = allIframes(document);
+    for (var i = 0; i < frames.length; i++) {
+      if (frames[i] === game) continue;
+      frames[i].classList.remove("pokiwrap-game");
     }
-    if (best) return best;
-    return frames.length ? frames[0] : null;
   }
 
   function ensureStyle() {
@@ -85,12 +78,17 @@ CHROME_HIDE_JS = r"""
       style.id = "pokiwrap-chrome-hide";
       (document.head || document.documentElement).appendChild(style);
     }
-    style.textContent = [
-      "html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:100%!important;height:100%!important;background:#000!important;}",
-      "header,nav,footer,aside,[role='banner'],[role='navigation'],[class*='PageHeader'],[class*='page-header'],[class*='NavBar'],[class*='Navbar'],[class*='TopBar'],[class*='top-bar'],[class*='GamesBar'],[class*='GameBar'],[class*='BottomBar'],[class*='Sidebar'],[class*='RightRail'],[class*='AdRail'],[class*='Advertisement'],[class*='HouseAd'],[class*='CommercialBreak'],[data-panel-section='popular']{display:none!important;visibility:hidden!important;pointer-events:none!important;height:0!important;max-height:0!important;}",
-      "iframe.pokiwrap-game{position:fixed!important;inset:0!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;min-width:100vw!important;min-height:100vh!important;max-width:none!important;max-height:none!important;border:0!important;margin:0!important;padding:0!important;z-index:2147483647!important;background:#000!important;display:block!important;visibility:visible!important;opacity:1!important;transform:none!important;clip:auto!important;clip-path:none!important;}",
-      "iframe[src*='doubleclick'],iframe[src*='googlesyndication'],iframe[src*='ads.poki'],iframe[src*='/ads/'],iframe[src*='housead'],iframe[src*='imasdk'],iframe[src*='amazon-adsystem'],ins.adsbygoogle,[id*='google_ads'],[class*='Advertisement'],[class*='ad-slot'],[class*='AdSlot'],[class*='HouseAd'],[class*='CommercialBreak']{display:none!important;visibility:hidden!important;pointer-events:none!important;width:0!important;height:0!important;}"
-    ].join("");
+    var ready = !!pickGame();
+    var css = [
+      "html,body{margin:0!important;padding:0!important;width:100%!important;height:100%!important;background:#0F1117!important;}",
+      "iframe[src*='doubleclick'],iframe[src*='googlesyndication'],iframe[src*='ads.poki'],iframe[src*='/ads/'],iframe[src*='housead'],iframe[src*='imasdk'],iframe[src*='amazon-adsystem'],ins.adsbygoogle,[id*='google_ads'],[class*='ad-slot'],[class*='AdSlot'],[class*='HouseAd'],[class*='CommercialBreak']{display:none!important;visibility:hidden!important;pointer-events:none!important;width:0!important;height:0!important;}"
+    ];
+    if (ready) {
+      css.push("html,body{overflow:hidden!important;background:#000!important;}");
+      css.push("header,nav,footer,[role='banner'],[role='navigation'],[class*='PageHeader'],[class*='page-header'],[class*='NavBar'],[class*='Navbar'],[class*='GamesBar'],[class*='GameBar']:not([class*='GamePlayer']),[class*='BottomBar'],[class*='Advertisement']{display:none!important;visibility:hidden!important;pointer-events:none!important;}");
+      css.push("iframe.pokiwrap-game{position:fixed!important;inset:0!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;min-width:100vw!important;min-height:100vh!important;max-width:none!important;max-height:none!important;border:0!important;margin:0!important;padding:0!important;z-index:2147483647!important;background:#000!important;display:block!important;visibility:visible!important;opacity:1!important;transform:none!important;clip:auto!important;clip-path:none!important;}");
+    }
+    style.textContent = css.join("");
   }
 
   function hideSiblings(game) {
@@ -133,7 +131,8 @@ CHROME_HIDE_JS = r"""
   }
 
     function fill(el) {
-    if (!el) return false;
+    if (!el || !isGameFrame(el)) return false;
+    unfillOthers(el);
     el.classList.add("pokiwrap-game");
     el.setAttribute("name", "gameFrame");
     el.setAttribute("allowfullscreen", "true");
@@ -320,10 +319,11 @@ from pathlib import Path
 
 os.environ.setdefault(
     "QTWEBENGINE_CHROMIUM_FLAGS",
-    "--autoplay-policy=no-user-gesture-required --disable-features=AudioServiceOutOfProcess",
+    "--autoplay-policy=no-user-gesture-required --disable-features=AudioServiceOutOfProcess "
+    "--ignore-gpu-blocklist --enable-webgl",
 )
 
-from PyQt6.QtCore import QEvent, Qt, QUrl
+from PyQt6.QtCore import QEvent, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineCore import (
@@ -411,8 +411,6 @@ def _is_ad_request(url: QUrl, blocked: set[str]) -> bool:
     host = (url.host() or "").lower()
     path = (url.path() or "").lower()
     text = url.toString().lower()
-    if _host_is(host, "v.poki-cdn.com"):
-        return True
     if _host_is(host, "ads.poki.com") or _host_is(host, "ads.crazygames.com") or _host_is(host, "ay.delivery") or _host_is(host, "onetag-sys.com"):
         return True
     if "/ads/" in path or "housead" in path or "housead" in text:
@@ -459,6 +457,25 @@ class AdInterceptor(QWebEngineUrlRequestInterceptor):
             pass
 
     def interceptRequest(self, info) -> None:
+        try:
+            url = info.requestUrl()
+            host = (url.host() or "").lower()
+            if any(
+                _host_is(host, domain)
+                for domain in (
+                    "games.poki.com",
+                    "poki-gdn.com",
+                    "gdn.poki.com",
+                    "game-cdn.poki.com",
+                    "games.crazygames.com",
+                    "game-files.crazygames.com",
+                    "files.crazygames.com",
+                )
+            ):
+                referer = b"https://www.crazygames.com/" if "crazygames" in host else b"https://poki.com/"
+                info.setHttpHeader(b"Referer", referer)
+        except Exception:
+            pass
         if not _adblock_enabled():
             return
         try:
@@ -674,6 +691,10 @@ class GameWindow(QMainWindow):
     def _on_loaded(self, ok: bool) -> None:
         if ok:
             self.view.page().runJavaScript(CHROME_HIDE_JS)
+        if sys.platform == "darwin":
+            size = self.size()
+            self.resize(size.width() + 1, size.height())
+            QTimer.singleShot(50, lambda: self.resize(size))
 
     def _on_fullscreen(self, request) -> None:
         on = True
