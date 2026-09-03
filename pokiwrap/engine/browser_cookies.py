@@ -1,0 +1,235 @@
+"""Copy Poki/Google session cookies from installed Chrome or Edge."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import shutil
+import sqlite3
+import sys
+import tempfile
+from pathlib import Path
+
+from pokiwrap.paths import account_cookies_path
+
+HOST_MARKERS = (
+    "poki.com",
+    "poki.io",
+    "poki-cdn.com",
+    "poki-gdn.com",
+    "poki-user-content.com",
+    "accounts.google.com",
+    ".google.com",
+    "google.com",
+    "googleapis.com",
+    "gstatic.com",
+    "firebase",
+    "identitytoolkit",
+    "appleid.apple.com",
+    "login.live.com",
+    "login.microsoftonline.com",
+    "live.com",
+)
+
+HOST_DENY = (
+    "ads.poki.com",
+    "doubleclick.",
+    "googlesyndication",
+    "googleadservices",
+    "googletagmanager",
+    "google-analytics",
+)
+
+
+def _wanted_host(host: str) -> bool:
+    text = (host or "").lower()
+    if not text:
+        return False
+    if any(token in text for token in HOST_DENY):
+        return False
+    return any(token in text for token in HOST_MARKERS)
+
+
+def _browser_roots() -> list[Path]:
+    local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    return [
+        local / "Google" / "Chrome" / "User Data",
+        local / "Microsoft" / "Edge" / "User Data",
+        local / "BraveSoftware" / "Brave-Browser" / "User Data",
+        local / "Chromium" / "User Data",
+    ]
+
+
+def _profile_dirs(root: Path) -> list[Path]:
+    names = ["Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4"]
+    found = [root / name for name in names if (root / name).is_dir()]
+    return found or ([root] if root.is_dir() else [])
+
+
+def _cookie_db(profile: Path) -> Path | None:
+    for relative in (Path("Network") / "Cookies", Path("Cookies")):
+        path = profile / relative
+        if path.exists():
+            return path
+    return None
+
+
+def _copy_db(src: Path) -> Path | None:
+    tmp = Path(tempfile.mkdtemp(prefix="pokiwrap-cookies-"))
+    dest = tmp / "Cookies"
+    try:
+        shutil.copy2(src, dest)
+        for suffix in ("-wal", "-shm"):
+            extra = Path(str(src) + suffix)
+            if extra.exists():
+                shutil.copy2(extra, tmp / extra.name)
+        return dest
+    except OSError:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return None
+
+
+def _dpapi_decrypt(blob: bytes) -> bytes:
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    buffer = ctypes.create_string_buffer(blob, len(blob))
+    blob_in = DATA_BLOB(len(blob), buffer)
+    blob_out = DATA_BLOB()
+    if ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+    ) == 0:
+        raise OSError("DPAPI decrypt failed")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+def _master_key(root: Path) -> bytes | None:
+    state = root / "Local State"
+    if not state.exists():
+        return None
+    try:
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        encrypted = base64.b64decode(payload["os_crypt"]["encrypted_key"])
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        return None
+    if encrypted.startswith(b"DPAPI"):
+        encrypted = encrypted[5:]
+    elif encrypted.startswith(b"APPB"):
+        return None
+    try:
+        return _dpapi_decrypt(encrypted)
+    except OSError:
+        return None
+
+
+def _decrypt_value(raw: bytes, key: bytes | None) -> str:
+    if not raw:
+        return ""
+    if raw.startswith((b"v10", b"v11")) and key:
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            return AESGCM(key).decrypt(raw[3:15], raw[15:], None).decode("utf-8", "replace")
+        except Exception:
+            return ""
+    if raw.startswith(b"v20"):
+        return ""
+    try:
+        return _dpapi_decrypt(raw).decode("utf-8", "replace")
+    except Exception:
+        try:
+            return raw.decode("utf-8", "replace")
+        except Exception:
+            return ""
+
+
+def _chrome_expiry_to_unix(value: int) -> float:
+    if not value or value < 1:
+        return 0
+    return max(0.0, value / 1_000_000 - 11_644_473_600)
+
+
+def _read_profile(root: Path, profile: Path, key: bytes | None) -> dict[str, str]:
+    db_path = _cookie_db(profile)
+    if db_path is None:
+        return {}
+    copied = _copy_db(db_path)
+    if copied is None:
+        return {}
+    seen: dict[str, str] = {}
+    try:
+        connection = sqlite3.connect(str(copied))
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = connection.execute(
+                "SELECT host_key, name, value, encrypted_value, path, is_secure, "
+                "is_httponly, expires_utc FROM cookies"
+            )
+            for row in rows:
+                host = str(row["host_key"] or "")
+                name = str(row["name"] or "")
+                if not name or not _wanted_host(host):
+                    continue
+                value = str(row["value"] or "")
+                if not value:
+                    encrypted = row["encrypted_value"] or b""
+                    if not isinstance(encrypted, (bytes, bytearray)):
+                        encrypted = bytes(encrypted)
+                    value = _decrypt_value(bytes(encrypted), key)
+                if not value:
+                    continue
+                path = str(row["path"] or "/") or "/"
+                secure = "1" if int(row["is_secure"] or 0) else "0"
+                http_only = "1" if int(row["is_httponly"] or 0) else "0"
+                expires = _chrome_expiry_to_unix(int(row["expires_utc"] or 0))
+                session = "1" if expires <= 0 else "0"
+                encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+                line_key = f"{name}\n{host}\n{path}"
+                seen[line_key] = (
+                    f"{name}\t{host}\t{path}\t{http_only}\t{secure}\t{session}\t"
+                    f"{expires}\t{encoded}\r\n"
+                )
+        except sqlite3.Error:
+            return {}
+        finally:
+            connection.close()
+    finally:
+        try:
+            shutil.rmtree(copied.parent, ignore_errors=True)
+        except OSError:
+            pass
+    return seen
+
+
+def export_browser_cookies() -> int:
+    if sys.platform != "win32":
+        return 0
+    collected: dict[str, str] = {}
+    for root in _browser_roots():
+        if not root.is_dir():
+            continue
+        key = _master_key(root)
+        for profile in _profile_dirs(root):
+            collected.update(_read_profile(root, profile, key))
+    path = account_cookies_path()
+    if path.exists():
+        try:
+            existing = path.read_text(encoding="utf-8", errors="replace")
+            for line in existing.splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    collected.setdefault(f"{parts[0]}\n{parts[1]}\n{parts[2]}", line.rstrip("\r") + "\r\n")
+        except OSError:
+            pass
+    if not collected:
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(collected.values()), encoding="utf-8")
+    return len(collected)

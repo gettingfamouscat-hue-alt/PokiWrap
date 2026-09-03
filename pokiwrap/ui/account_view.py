@@ -84,9 +84,9 @@ class AccountView(QWidget):
         card_layout.addWidget(adblock_hint)
 
         note = QLabel(
-            "Sign in inside PokiWrap — Chrome on poki.com does not carry over. "
-            "Close game windows first. Connect detects an existing PokiWrap sign-in automatically. "
-            "Play time comes from the account; cloud game saves need that same session in the game window."
+            "Use the same Poki account as on poki.com. PokiWrap then pulls that account's cloud save "
+            "and ignores extra progress that only existed inside the wrapper. Close game windows, "
+            "click Connect, then open the game."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #6E7384; font-size: 12px;")
@@ -109,7 +109,7 @@ class AccountView(QWidget):
         if connected:
             self.status.setText(f"Connected{(' as ' + username) if username else ''}")
             self.detail.setText(
-                "This Poki account is linked. Games load play time and cloud saves from it. "
+                "This Poki account is linked. Games pull cloud saves from poki.com for this account. "
                 "Disconnect to sign out."
             )
             self.connect_btn.setText("Reconnect")

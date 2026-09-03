@@ -17,6 +17,12 @@ from pokiwrap.ui.main_window import MainWindow
 class _RewriteThread(QThread):
     def run(self) -> None:
         try:
+            from pokiwrap.engine.browser_cookies import export_browser_cookies
+
+            export_browser_cookies()
+        except Exception:
+            pass
+        try:
             from pokiwrap.engine.generator import rewrite_existing_wrappers
 
             rewrite_existing_wrappers()

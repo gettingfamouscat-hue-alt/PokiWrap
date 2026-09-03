@@ -120,9 +120,10 @@ CHROME_HIDE_JS = r"""
     }
   }
 
-  function fill(el) {
+    function fill(el) {
     if (!el) return false;
     el.classList.add("pokiwrap-game");
+    el.setAttribute("name", "gameFrame");
     el.setAttribute("allowfullscreen", "true");
     el.setAttribute("allow", "autoplay; fullscreen; gamepad; clipboard-read; clipboard-write");
     hideSiblings(el);

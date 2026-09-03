@@ -124,6 +124,12 @@ def _refresh_wrappers() -> None:
 
 
 def connect_account(parent=None) -> dict:
+    try:
+        from pokiwrap.engine.browser_cookies import export_browser_cookies
+
+        export_browser_cookies()
+    except Exception:
+        pass
     if sys.platform == "win32":
         from pokiwrap.engine.exe import ensure_login_exe
 

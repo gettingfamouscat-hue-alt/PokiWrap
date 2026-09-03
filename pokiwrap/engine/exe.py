@@ -32,6 +32,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -187,7 +188,10 @@ internal sealed class GameForm : Form
             iso.Start();
             Action go = delegate
             {{
-                web.CoreWebView2.Navigate({page_url});
+                _PrepareWebsiteSave(web, {cookies_path}, {account_path}, delegate
+                {{
+                    web.CoreWebView2.Navigate({page_url});
+                }});
             }};
             if (IsHandleCreated)
                 BeginInvoke(go);
@@ -203,6 +207,65 @@ internal sealed class GameForm : Form
             }};
             hide.Start();
         }};
+    }}
+
+    static bool _HasLinkedAccount(string accountFile, string cookieFile)
+    {{
+        try
+        {{
+            if (File.Exists(cookieFile) && new FileInfo(cookieFile).Length > 0)
+                return true;
+            if (!File.Exists(accountFile))
+                return false;
+            string text = File.ReadAllText(accountFile);
+            if (text.IndexOf("\\"connected\\": true") >= 0 || text.IndexOf("\\"connected\\":true") >= 0)
+                return true;
+            string[] lines = text.Split(new char[] {{ '\\n' }});
+            return lines.Length > 0 && lines[0].Trim() == "1";
+        }}
+        catch {{ }}
+        return false;
+    }}
+
+    static void _PrepareWebsiteSave(WebView2 web, string cookieFile, string accountFile, Action done)
+    {{
+        CoreWebView2 core = web.CoreWebView2;
+        Action finish = delegate
+        {{
+            _ImportPokiCookies(core, cookieFile);
+            if (done != null) done();
+        }};
+        if (core == null || !_HasLinkedAccount(accountFile, cookieFile))
+        {{
+            finish();
+            return;
+        }}
+        try
+        {{
+            CoreWebView2Profile profile = core.Profile;
+            CoreWebView2BrowsingDataKinds kinds =
+                CoreWebView2BrowsingDataKinds.IndexedDb
+                | CoreWebView2BrowsingDataKinds.LocalStorage
+                | CoreWebView2BrowsingDataKinds.CacheStorage;
+            profile.ClearBrowsingDataAsync(kinds).ContinueWith(
+                delegate(Task task)
+                {{
+                    try
+                    {{
+                        if (web.IsHandleCreated)
+                            web.BeginInvoke(finish);
+                        else
+                            finish();
+                    }}
+                    catch
+                    {{
+                        try {{ finish(); }} catch {{ }}
+                    }}
+                }});
+            return;
+        }}
+        catch {{ }}
+        finish();
     }}
 
     static void _ImportPokiCookies(CoreWebView2 core, string cookieFile)
@@ -322,6 +385,7 @@ def build_game_exe(
             game_url=_csharp_string(game_url),
             page_url=_csharp_string(page),
             cookies_path=_csharp_string(str(account_cookies_path())),
+            account_path=_csharp_string(str(account_state_path())),
             adblock_list=_csharp_string(str(adblock_domains_path())),
             adblock_settings=_csharp_string(str(settings_path())),
         ),
@@ -474,6 +538,54 @@ internal static class AccountStore
             "https://games.poki.com/"
         }};
         SaveCookiesFrom(core, cookieFile, urls, 0, new Dictionary<string, string>(), done);
+    }}
+
+    public static void ImportCookies(CoreWebView2 core, string cookieFile)
+    {{
+        try
+        {{
+            if (core == null || !File.Exists(cookieFile))
+                return;
+            string[] lines = File.ReadAllLines(cookieFile);
+            for (int i = 0; i < lines.Length; i++)
+            {{
+                try
+                {{
+                    string line = lines[i].Trim();
+                    if (line.Length == 0)
+                        continue;
+                    string[] parts = line.Split('\t');
+                    if (parts.Length < 8)
+                        continue;
+                    string name = parts[0];
+                    string domain = parts[1];
+                    string path = string.IsNullOrEmpty(parts[2]) ? "/" : parts[2];
+                    if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(domain))
+                        continue;
+                    if (domain.IndexOf("poki", StringComparison.OrdinalIgnoreCase) < 0
+                        && domain.IndexOf("google", StringComparison.OrdinalIgnoreCase) < 0
+                        && domain.IndexOf("firebase", StringComparison.OrdinalIgnoreCase) < 0
+                        && domain.IndexOf("apple", StringComparison.OrdinalIgnoreCase) < 0
+                        && domain.IndexOf("microsoft", StringComparison.OrdinalIgnoreCase) < 0
+                        && domain.IndexOf("live.com", StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    string value = Encoding.UTF8.GetString(Convert.FromBase64String(parts[7]));
+                    CoreWebView2Cookie cookie = core.CookieManager.CreateCookie(name, value, domain, path);
+                    cookie.IsHttpOnly = parts[3] == "1";
+                    cookie.IsSecure = parts[4] == "1" || name.StartsWith("__Secure") || name.StartsWith("__Host");
+                    cookie.SameSite = cookie.IsSecure
+                        ? CoreWebView2CookieSameSiteKind.None
+                        : CoreWebView2CookieSameSiteKind.Lax;
+                    double expires = 0;
+                    double.TryParse(parts[6], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out expires);
+                    if (parts[5] != "1" && expires > 0)
+                        cookie.Expires = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(expires).ToLocalTime();
+                    core.CookieManager.AddOrUpdateCookie(cookie);
+                }}
+                catch {{ }}
+            }}
+        }}
+        catch {{ }}
     }}
 
     static void AppendCookie(Dictionary<string, string> seen, CoreWebView2Cookie cookie)
@@ -647,6 +759,7 @@ internal sealed class LoginForm : Form
             }}
         }};
         web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync({detect_js});
+        AccountStore.ImportCookies(web.CoreWebView2, cookieFile);
         web.CoreWebView2.Navigate("https://poki.com/en");
         Timer persist = new Timer();
         persist.Interval = 1500;
@@ -931,6 +1044,12 @@ def build_pokiwrap_exe() -> Path | None:
         "PyQt6.QtCore",
         "--collect-binaries",
         "PyQt6",
+        "--hidden-import",
+        "cryptography",
+        "--hidden-import",
+        "cffi",
+        "--collect-binaries",
+        "cryptography",
         "--add-data",
         str(project_root() / "pokiwrap" / "engine" / "adblock_host.cs") + os.pathsep + "pokiwrap/engine",
         "--add-data",
