@@ -9,11 +9,88 @@ import sys
 
 from pokiwrap.paths import account_cookies_path, account_profile_dir, account_state_path
 
+FIND_USER_JS = r"""
+(function () {
+  var name = "";
+  var loggedIn = false;
+  function takeName(value) {
+    if (!value) return;
+    var text = String(value);
+    if (text === "TestUser" || text === "null" || text === "undefined") return;
+    if (text.length < 2 || text.length > 64) return;
+    if (!/^[A-Za-z0-9._\- ]+$/.test(text)) return;
+    name = text;
+    loggedIn = true;
+  }
+  function fromText(value) {
+    if (!value) return;
+    var text = String(value);
+    var patterns = [
+      /"username"\s*:\s*"([^"]{2,64})"/,
+      /"displayName"\s*:\s*"([^"]{2,64})"/,
+      /"userName"\s*:\s*"([^"]{2,64})"/,
+      /"nickname"\s*:\s*"([^"]{2,64})"/
+    ];
+    for (var k = 0; k < patterns.length; k++) {
+      var match = text.match(patterns[k]);
+      if (match) takeName(match[1]);
+    }
+    if (/"status"\s*:\s*"authenticated"/i.test(text)) loggedIn = true;
+    if (/"isLoggedIn"\s*:\s*true/.test(text) || /"loggedIn"\s*:\s*true/.test(text)) loggedIn = true;
+  }
+  try {
+    for (var i = 0; i < localStorage.length; i++) {
+      var key = localStorage.key(i) || "";
+      fromText(key);
+      fromText(localStorage.getItem(key));
+      if (/firebase|idToken|refreshToken|user-vault|poki_uid|sb-access|supabase/i.test(key))
+        loggedIn = true;
+    }
+  } catch (e) {}
+  try { fromText(document.documentElement.innerHTML); } catch (e) {}
+  var nodes = document.querySelectorAll("button, a, [role='button'], [aria-label]");
+  for (var n = 0; n < nodes.length; n++) {
+    var t = ((nodes[n].textContent || "") + " " + (nodes[n].getAttribute("aria-label") || ""))
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (t === "log out" || t === "sign out" || t === "logout" || t.indexOf("log out") >= 0)
+      loggedIn = true;
+  }
+    if (name) loggedIn = true;
+    return JSON.stringify({ username: name, loggedIn: loggedIn });
+})();
+"""
+
+
+def _profile_has_files() -> bool:
+    profile = account_profile_dir()
+    markers = (
+        profile / "storage",
+        profile / "EBWebView",
+        profile / "Default",
+    )
+    for path in markers:
+        try:
+            if path.is_dir() and any(path.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _has_session() -> bool:
+    cookies = account_cookies_path()
+    try:
+        if cookies.exists() and cookies.stat().st_size > 0:
+            return True
+    except OSError:
+        pass
+    return _profile_has_files()
+
 
 def load_account() -> dict:
     path = account_state_path()
-    cookies = account_cookies_path()
-    profile = account_profile_dir() / "storage"
     if not path.exists():
         return {"connected": False, "username": ""}
     try:
@@ -32,10 +109,7 @@ def load_account() -> dict:
         lines = text.splitlines()
         connected = bool(lines) and lines[0].strip() == "1"
         username = lines[1].strip() if len(lines) > 1 else ""
-    has_session = (cookies.exists() and cookies.stat().st_size > 0) or (
-        profile.exists() and any(profile.iterdir())
-    )
-    if connected and not has_session:
+    if connected and not _has_session():
         connected = False
     return {"connected": connected, "username": username}
 
@@ -69,12 +143,12 @@ def sign_out_account() -> dict:
         from pokiwrap.engine.exe import ensure_login_exe
 
         exe = ensure_login_exe()
-        completed = subprocess.run([str(exe), "--signout"], check=False)
-        if completed.returncode != 0:
-            _forget_local_account()
-        return load_account()
+        subprocess.run([str(exe), "--signout"], check=False)
     shutil.rmtree(account_profile_dir(), ignore_errors=True)
-    account_profile_dir()
+    try:
+        account_profile_dir()
+    except OSError:
+        pass
     _forget_local_account()
     return load_account()
 

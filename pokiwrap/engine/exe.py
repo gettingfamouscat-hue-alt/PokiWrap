@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pokiwrap.engine.account import FIND_USER_JS
 from pokiwrap.engine.shortcut import _safe_shortcut_name
 from pokiwrap.engine.template import CHROME_HIDE_JS
 from pokiwrap.engine.webview2 import ensure_webview2
@@ -112,7 +113,7 @@ internal sealed class GameForm : Form
         web.CreationProperties = new CoreWebView2CreationProperties();
         web.CreationProperties.UserDataFolder = userData;
         web.CreationProperties.AdditionalBrowserArguments =
-            "--autoplay-policy=no-user-gesture-required --ignore-gpu-blocklist --disable-features=ThirdPartyStoragePartitioning,TrackingPrevention";
+            "--autoplay-policy=no-user-gesture-required --ignore-gpu-blocklist --disable-features=ThirdPartyStoragePartitioning,TrackingPrevention,msWebView2EnableTrackingPrevention";
         Controls.Add(web);
         web.SendToBack();
 
@@ -144,6 +145,11 @@ internal sealed class GameForm : Form
             web.CoreWebView2.Settings.IsWebMessageEnabled = true;
             web.CoreWebView2.Settings.UserAgent =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
+            web.CoreWebView2.PermissionRequested += delegate(object sPerm, CoreWebView2PermissionRequestedEventArgs ePerm)
+            {{
+                ePerm.Handled = true;
+                ePerm.State = CoreWebView2PermissionState.Allow;
+            }};
             AdBlock.Attach(web.CoreWebView2, {adblock_list}, {adblock_settings});
             web.CoreWebView2.WebMessageReceived += delegate(object sMsg, CoreWebView2WebMessageReceivedEventArgs eMsg)
             {{
@@ -181,7 +187,6 @@ internal sealed class GameForm : Form
             iso.Start();
             Action go = delegate
             {{
-                _ImportPokiCookies(web.CoreWebView2, {cookies_path});
                 web.CoreWebView2.Navigate({page_url});
             }};
             if (IsHandleCreated)
@@ -374,37 +379,20 @@ def publish_desktop_exe(exe_path: Path, app_name: str) -> Path:
     return dest
 
 
-DETECT_JS = r"""
-(function () {
-  function findUser() {
-    var name = "";
-    function fromText(value) {
-      if (!value) return;
-      var text = String(value);
-      var match = text.match(/"username"\s*:\s*"([^"]{2,64})"/);
-      if (match && match[1] && match[1] !== "TestUser") name = match[1];
-      match = text.match(/"displayName"\s*:\s*"([^"]{2,64})"/);
-      if (match && match[1]) name = match[1];
-    }
-    try {
-      for (var i = 0; i < localStorage.length; i++) fromText(localStorage.getItem(localStorage.key(i)));
-    } catch (e) {}
-    try { fromText(document.documentElement.innerHTML); } catch (e) {}
-    var loggedIn = !!name;
-    var nodes = document.querySelectorAll("button, a, [role='button']");
-    for (var i = 0; i < nodes.length; i++) {
-      var t = (nodes[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-      if (t === "log out" || t === "sign out" || t === "logout") loggedIn = true;
-    }
-    return JSON.stringify({ username: name, loggedIn: loggedIn });
-  }
-  function ping() {
-    try { window.chrome.webview.postMessage(findUser()); } catch (e) {}
-  }
-  ping();
-  setInterval(ping, 1200);
-})();
-"""
+DETECT_JS = (
+    "(function () {\n"
+    "  function ping() {\n"
+    "    try {\n"
+    "      var result = "
+    + FIND_USER_JS.strip()
+    + ";\n"
+    "      window.chrome.webview.postMessage(result);\n"
+    "    } catch (e) {}\n"
+    "  }\n"
+    "  ping();\n"
+    "  setInterval(ping, 800);\n"
+    "})();\n"
+)
 
 LOGIN_CS = """\
 using System;
@@ -548,6 +536,8 @@ internal sealed class LoginForm : Form
     string detectedName = "";
     bool sawLogin = false;
     bool closing = false;
+    bool autoSaved = false;
+    int loginHits = 0;
 
     public LoginForm()
     {{
@@ -570,7 +560,7 @@ internal sealed class LoginForm : Form
         bar.BackColor = Color.FromArgb(22, 25, 34);
 
         status = new Label();
-        status.Text = "Sign in to Poki with Google, Apple, Microsoft, or a passkey, then click Done.";
+        status.Text = "Sign in to Poki with Google, Apple, Microsoft, or a passkey. Already signed in? This window will detect it.";
         status.ForeColor = Color.FromArgb(232, 234, 237);
         status.Font = new Font("Segoe UI", 10f);
         status.AutoSize = false;
@@ -599,7 +589,7 @@ internal sealed class LoginForm : Form
         web.CreationProperties = new CoreWebView2CreationProperties();
         web.CreationProperties.UserDataFolder = userData;
         web.CreationProperties.AdditionalBrowserArguments =
-            "--disable-features=ThirdPartyStoragePartitioning,TrackingPrevention";
+            "--disable-features=ThirdPartyStoragePartitioning,TrackingPrevention,msWebView2EnableTrackingPrevention";
         Controls.Add(web);
         web.BringToFront();
 
@@ -628,7 +618,11 @@ internal sealed class LoginForm : Form
         web.CoreWebView2.Settings.IsWebMessageEnabled = true;
         web.CoreWebView2.Settings.UserAgent =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
-        AdBlock.Attach(web.CoreWebView2, {adblock_list}, {adblock_settings});
+        web.CoreWebView2.PermissionRequested += delegate(object sPerm, CoreWebView2PermissionRequestedEventArgs ePerm)
+        {{
+            ePerm.Handled = true;
+            ePerm.State = CoreWebView2PermissionState.Allow;
+        }};
         web.CoreWebView2.NewWindowRequested += delegate(object sWin, CoreWebView2NewWindowRequestedEventArgs eWin)
         {{
             eWin.Handled = true;
@@ -640,29 +634,79 @@ internal sealed class LoginForm : Form
             try {{ msg = eMsg.TryGetWebMessageAsString(); }} catch {{ }}
             if (msg.IndexOf("\\"loggedIn\\":true") >= 0)
             {{
-                sawLogin = true;
+                string user = "";
                 int key = msg.IndexOf("\\"username\\":\\"");
                 if (key >= 0)
                 {{
                     int start = key + 13;
                     int end = msg.IndexOf("\\"", start);
                     if (end > start)
-                        detectedName = msg.Substring(start, end - start);
+                        user = msg.Substring(start, end - start);
                 }}
-                status.Text = string.IsNullOrEmpty(detectedName)
-                    ? "Signed in. Click Done to save this account to PokiWrap."
-                    : ("Signed in as " + detectedName + ". Click Done to save.");
+                MarkLoggedIn(user);
             }}
         }};
         web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync({detect_js});
         web.CoreWebView2.Navigate("https://poki.com/en");
         Timer persist = new Timer();
-        persist.Interval = 2000;
+        persist.Interval = 1500;
         persist.Tick += delegate
         {{
             try {{ AccountStore.SaveCookies(web.CoreWebView2, cookieFile, null); }} catch {{ }}
+            try
+            {{
+                web.CoreWebView2.CookieManager.GetCookiesAsync("https://user-vault.poki.com/").ContinueWith(
+                    delegate(Task<List<CoreWebView2Cookie>> task)
+                    {{
+                        try
+                        {{
+                            if (task.Status != TaskStatus.RanToCompletion || task.Result == null)
+                                return;
+                            bool auth = false;
+                            foreach (CoreWebView2Cookie cookie in task.Result)
+                            {{
+                                string n = cookie.Name == null ? "" : cookie.Name.ToLowerInvariant();
+                                if (n.IndexOf("optanon") >= 0 || n.IndexOf("_ga") >= 0 || n == "cf_clearance")
+                                    continue;
+                                if (n.IndexOf("session") >= 0 || n.IndexOf("token") >= 0 || n.IndexOf("auth") >= 0
+                                    || n.IndexOf("vault") >= 0 || n.IndexOf("user") >= 0 || n.IndexOf("sid") >= 0
+                                    || n.IndexOf("poki") >= 0)
+                                    auth = true;
+                            }}
+                            if (!auth)
+                                return;
+                            BeginInvoke(new Action(delegate {{ MarkLoggedIn(detectedName); }}));
+                        }}
+                        catch {{ }}
+                    }});
+            }}
+            catch {{ }}
         }};
         persist.Start();
+    }}
+
+    void MarkLoggedIn(string username)
+    {{
+        if (closing)
+            return;
+        if (!string.IsNullOrEmpty(username))
+            detectedName = username;
+        sawLogin = true;
+        loginHits++;
+        status.Text = string.IsNullOrEmpty(detectedName)
+            ? "Signed in. Saving this account to PokiWrap..."
+            : ("Signed in as " + detectedName + ". Saving...");
+        if (autoSaved || loginHits < 2)
+            return;
+        autoSaved = true;
+        Timer done = new Timer();
+        done.Interval = 400;
+        done.Tick += delegate
+        {{
+            done.Stop();
+            Finish(true);
+        }};
+        done.Start();
     }}
 
     void Finish(bool signedIn)

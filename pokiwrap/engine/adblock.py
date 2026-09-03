@@ -79,11 +79,18 @@ adtrafficquality.google
 PROTECTED = {
     "poki.com",
     "www.poki.com",
+    "a.poki.com",
     "games.poki.com",
     "game-cdn.poki.com",
     "poki-cdn.com",
     "img.poki-cdn.com",
     "poki-gdn.com",
+    "poki.io",
+    "t.poki.io",
+    "geo.poki.io",
+    "auds.poki.io",
+    "api.poki.io",
+    "poki-user-content.com",
     "user-vault.poki.com",
     "api.poki.com",
     "auth.poki.com",
@@ -104,6 +111,8 @@ PROTECTED = {
 }
 
 def _is_protected(host: str) -> bool:
+    if host == "ads.poki.com" or host.endswith(".ads.poki.com"):
+        return False
     if host in PROTECTED:
         return True
     return any(host.endswith("." + allowed) for allowed in PROTECTED)
@@ -161,8 +170,16 @@ def _write_domains(domains: set[str]) -> Path:
 def ensure_adblock_list() -> Path:
     path = adblock_domains_path()
     seed = {line.strip() for line in SEED_DOMAINS.splitlines() if line.strip()}
-    if not path.exists():
-        _write_domains(seed)
+    if path.exists():
+        try:
+            seed.update(
+                line.strip().lower()
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.startswith("#")
+            )
+        except OSError:
+            pass
+    _write_domains({host for host in seed if host and not _is_protected(host)})
     return path
 
 
@@ -186,7 +203,7 @@ def update_adblock_list() -> Path:
             domains.update(_parse_filter_list(text))
         except Exception:
             continue
-    domains -= PROTECTED
+    domains = {host for host in domains if host and not _is_protected(host)}
     _write_domains(domains)
     stamp = path.with_suffix(".updated")
     stamp.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")

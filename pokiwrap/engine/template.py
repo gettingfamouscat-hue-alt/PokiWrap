@@ -4,6 +4,7 @@ from __future__ import annotations
 
 CHROME_HIDE_JS = r"""
 (function () {
+  try { if (window.top !== window.self) return; } catch (err) { return; }
   var TARGET_SLUG = "__TARGET_SLUG__";
 
   function frameSrc(frame) {
@@ -11,7 +12,7 @@ CHROME_HIDE_JS = r"""
   }
 
     function isAuthFrame(iframe) {
-      return /accounts\.google|appleid\.apple|login\.live|login\.microsoftonline|firebaseapp|identitytoolkit|securetoken/i.test(frameSrc(iframe));
+      return /accounts\.google|appleid\.apple|login\.live|login\.microsoftonline|firebaseapp|identitytoolkit|securetoken|user-vault|poki\.io/i.test(frameSrc(iframe));
     }
 
     function isAdFrame(iframe) {
@@ -20,6 +21,14 @@ CHROME_HIDE_JS = r"""
 
   function isGameFrame(iframe) {
     return /games\.poki\.com|poki-gdn\.com|gdn\.poki\.com|game-cdn\.poki|poki-cdn\.com\/game/i.test(frameSrc(iframe));
+  }
+
+  function isHelperFrame(iframe) {
+    if (isAdFrame(iframe)) return false;
+    if (isAuthFrame(iframe) || isGameFrame(iframe)) return true;
+    var src = frameSrc(iframe).trim();
+    if (!src || /about:blank|javascript:/i.test(src)) return true;
+    return /poki\.com|poki\.io|poki-cdn|poki-gdn|poki-user-content|googleapis|gstatic|google|apple|microsoft|live\.com/i.test(src);
   }
 
   function allIframes(root) {
@@ -80,8 +89,16 @@ CHROME_HIDE_JS = r"""
         var sibling = parent.children[i];
         if (sibling !== node && sibling.id !== "pokiwrap-chrome-hide") {
           var tag = (sibling.tagName || "").toUpperCase();
-          if (tag === "SCRIPT" || tag === "STYLE" || tag === "LINK") continue;
-          if (tag === "IFRAME" && isAuthFrame(sibling)) continue;
+          if (tag === "SCRIPT" || tag === "STYLE" || tag === "LINK" || tag === "META" || tag === "NOSCRIPT") continue;
+          if (tag === "IFRAME" && isHelperFrame(sibling)) continue;
+          if (sibling.querySelectorAll) {
+            var nested = sibling.querySelectorAll("iframe");
+            var keep = false;
+            for (var f = 0; f < nested.length; f++) {
+              if (isHelperFrame(nested[f])) { keep = true; break; }
+            }
+            if (keep) continue;
+          }
           sibling.style.setProperty("display", "none", "important");
           sibling.style.setProperty("visibility", "hidden", "important");
           sibling.style.setProperty("pointer-events", "none", "important");

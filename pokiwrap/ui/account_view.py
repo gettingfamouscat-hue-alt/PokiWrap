@@ -59,7 +59,7 @@ class AccountView(QWidget):
         self.connect_btn.setFixedWidth(220)
         self.connect_btn.clicked.connect(self._connect)
 
-        self.signout_btn = QPushButton("Sign out")
+        self.signout_btn = QPushButton("Disconnect")
         self.signout_btn.setObjectName("dangerButton")
         self.signout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.signout_btn.setFixedWidth(220)
@@ -84,8 +84,9 @@ class AccountView(QWidget):
         card_layout.addWidget(adblock_hint)
 
         note = QLabel(
-            "Connect your Poki account inside PokiWrap (Chrome sign-in on the website does not carry over). "
-            "Close game windows first, then reconnect. Existing Windows .exe games are rebuilt to share that session."
+            "Sign in inside PokiWrap — Chrome on poki.com does not carry over. "
+            "Close game windows first. Connect detects an existing PokiWrap sign-in automatically. "
+            "Play time comes from the account; cloud game saves need that same session in the game window."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #6E7384; font-size: 12px;")
@@ -107,25 +108,31 @@ class AccountView(QWidget):
         username = str(state.get("username") or "").strip()
         if connected:
             self.status.setText(f"Connected{(' as ' + username) if username else ''}")
-            self.detail.setText("Game wrappers will load this Poki account and its cloud progress.")
+            self.detail.setText(
+                "This Poki account is linked. Games load play time and cloud saves from it. "
+                "Disconnect to sign out."
+            )
             self.connect_btn.setText("Reconnect")
+            self.connect_btn.setVisible(False)
             self.signout_btn.setVisible(True)
         else:
             self.status.setText("Not connected")
             self.detail.setText(
-                "Connect your Poki account, then open a game wrapper to pick up saved progress."
+                "Connect your Poki account. If you are already signed in, PokiWrap will detect it "
+                "and show Disconnect."
             )
             self.connect_btn.setText("Connect Poki account")
+            self.connect_btn.setVisible(True)
             self.signout_btn.setVisible(False)
         self.adblock.blockSignals(True)
         self.adblock.setChecked(adblock_enabled())
         self.adblock.blockSignals(False)
 
-    def _busy(self, busy: bool) -> None:
+    def _busy(self, busy: bool, message: str | None = None) -> None:
         self.connect_btn.setEnabled(not busy)
         self.signout_btn.setEnabled(not busy)
         if busy:
-            self.detail.setText("Waiting for the Poki sign-in window…")
+            self.detail.setText(message or "Waiting for the Poki sign-in window…")
 
     def _connect(self) -> None:
         if sys.platform != "win32":
@@ -149,7 +156,7 @@ class AccountView(QWidget):
     def _start(self, sign_out: bool) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
-        self._busy(True)
+        self._busy(True, "Disconnecting…" if sign_out else "Looking for your Poki sign-in…")
         worker = _AccountWorker(sign_out, self)
         worker.finished_ok.connect(self._on_done)
         worker.failed.connect(self._on_fail)

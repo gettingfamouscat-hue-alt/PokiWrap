@@ -68,23 +68,17 @@ internal static class AdBlock
         catch { }
     }
 
+    static bool HostIs(string host, string domain)
+    {
+        return host == domain || host.EndsWith("." + domain);
+    }
+
     static bool Allowed(string host)
     {
-        if (host == "ads.poki.com")
+        if (HostIs(host, "ads.poki.com"))
             return false;
-        if (host == "poki.com" || host == "www.poki.com")
-            return true;
-        if (host == "games.poki.com" || host.EndsWith(".games.poki.com"))
-            return true;
-        if (host == "poki-gdn.com" || host.EndsWith(".poki-gdn.com"))
-            return true;
-        if (host == "poki-cdn.com" || host.EndsWith(".poki-cdn.com"))
-            return true;
-        if (host == "game-cdn.poki.com" || host == "user-vault.poki.com")
-            return true;
-        if (host == "api.poki.com" || host.EndsWith(".api.poki.com"))
-            return true;
-        if (host == "auth.poki.com" || host == "account.poki.com" || host == "accounts.poki.com")
+        if (HostIs(host, "poki.com") || HostIs(host, "poki.io") || HostIs(host, "poki-cdn.com")
+            || HostIs(host, "poki-gdn.com") || HostIs(host, "poki-user-content.com"))
             return true;
         if (host.Contains("firebase"))
             return true;
@@ -98,7 +92,7 @@ internal static class AdBlock
             return true;
         if (host == "login.microsoftonline.com" || host == "login.live.com")
             return true;
-        if (host == "gstatic.com" || host.EndsWith(".gstatic.com"))
+        if (HostIs(host, "gstatic.com") || HostIs(host, "googleapis.com"))
             return true;
         return false;
     }

@@ -18,33 +18,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from pokiwrap.engine.account import load_account
+from pokiwrap.engine.account import FIND_USER_JS, load_account
 from pokiwrap.paths import account_profile_dir, account_state_path, assets_dir
-
-FIND_USER_JS = r"""
-(function () {
-  var name = "";
-  function fromText(value) {
-    if (!value) return;
-    var text = String(value);
-    var match = text.match(/"username"\s*:\s*"([^"]{2,64})"/);
-    if (match && match[1] && match[1] !== "TestUser") name = match[1];
-    match = text.match(/"displayName"\s*:\s*"([^"]{2,64})"/);
-    if (match && match[1]) name = match[1];
-  }
-  try {
-    for (var i = 0; i < localStorage.length; i++) fromText(localStorage.getItem(localStorage.key(i)));
-  } catch (e) {}
-  try { fromText(document.documentElement.innerHTML); } catch (e) {}
-  var loggedIn = !!name;
-  var nodes = document.querySelectorAll("button, a, [role='button']");
-  for (var i = 0; i < nodes.length; i++) {
-    var t = (nodes[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-    if (t === "log out" || t === "sign out" || t === "logout") loggedIn = true;
-  }
-  return JSON.stringify({ username: name, loggedIn: loggedIn });
-})();
-"""
 
 
 def _write_account(connected: bool, username: str) -> None:
@@ -107,6 +82,7 @@ class LoginDialog(QDialog):
         self.setMinimumSize(800, 560)
         self._username = ""
         self._logged_in = False
+        self._auto_done = False
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor("#0F1117"))
         self.setPalette(palette)
@@ -167,10 +143,13 @@ class LoginDialog(QDialog):
         if data.get("loggedIn"):
             self._logged_in = True
             self.status.setText(
-                f"Signed in as {self._username}. Click Done to save."
+                f"Signed in as {self._username}. Saving…"
                 if self._username
-                else "Signed in. Click Done to save this account to PokiWrap."
+                else "Signed in. Saving this account to PokiWrap…"
             )
+            if not self._auto_done:
+                self._auto_done = True
+                QTimer.singleShot(500, self._finish)
 
     def _finish(self) -> None:
         self._timer.stop()
