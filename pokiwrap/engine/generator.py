@@ -13,7 +13,7 @@ from pokiwrap.engine.artwork import fetch_logo_bytes, fetch_page_artwork
 from pokiwrap.engine.exe import build_game_exe, publish_desktop_exe
 from pokiwrap.engine.icons import render_fallback_icon, save_square_logo
 from pokiwrap.engine.shortcut import create_desktop_shortcut
-from pokiwrap.engine.template import CHROME_HIDE_JS, WRAPPER_TEMPLATE
+from pokiwrap.engine.template import AD_SKIP_JS, CHROME_HIDE_JS, WRAPPER_TEMPLATE
 from pokiwrap.paths import generated_app_roots, generated_apps_dir
 
 
@@ -91,6 +91,7 @@ def write_wrapper_script(script_path: Path, name: str, url: str) -> None:
         .replace("__GAME_URL__", repr(url))
         .replace("__PROFILE_NAME__", repr(f"pokiwrap_{slug.replace('-', '_')}"))
         .replace("__CHROME_HIDE_JS__", repr(js))
+        .replace("__AD_SKIP_JS__", repr(AD_SKIP_JS))
         .replace("__TARGET_SLUG__", repr(slug)),
         encoding="utf-8",
         newline="\n",

@@ -16,7 +16,7 @@ CHROME_HIDE_JS = r"""
     }
 
     function isAdFrame(iframe) {
-      return /ads\.poki|doubleclick|googlesyndication|imasdk|adnxs|prebid|facebook\.com|youtube\.com\/embed/i.test(frameSrc(iframe));
+      return /ads\.poki|\/ads\/|housead|doubleclick|googlesyndication|imasdk|adnxs|prebid|amazon-adsystem|ay\.delivery|onetag-sys|youtube\.com\/embed/i.test(frameSrc(iframe));
     }
 
   function isGameFrame(iframe) {
@@ -24,11 +24,19 @@ CHROME_HIDE_JS = r"""
   }
 
   function isHelperFrame(iframe) {
-    if (isAdFrame(iframe)) return false;
+    if (isAdFrame(iframe) || isWrongGame(iframe)) return false;
     if (isAuthFrame(iframe) || isGameFrame(iframe)) return true;
     var src = frameSrc(iframe).trim();
     if (!src || /about:blank|javascript:/i.test(src)) return true;
+    if (/\/ads\/|housead|\/vast/i.test(src)) return false;
     return /poki\.com|poki\.io|poki-cdn|poki-gdn|poki-user-content|googleapis|gstatic|google|apple|microsoft|live\.com/i.test(src);
+  }
+
+  function isWrongGame(iframe) {
+    var src = frameSrc(iframe);
+    var match = src.match(/poki\.com\/[^/]+\/g\/([^/?#]+)/i);
+    if (match && TARGET_SLUG && match[1].toLowerCase() !== TARGET_SLUG.toLowerCase()) return true;
+    return false;
   }
 
   function allIframes(root) {
@@ -47,7 +55,8 @@ CHROME_HIDE_JS = r"""
     var frames = allIframes(document);
     var i;
     for (i = 0; i < frames.length; i++) {
-      if (isGameFrame(frames[i]) && !isAdFrame(frames[i])) return frames[i];
+      if (isWrongGame(frames[i]) || isAdFrame(frames[i])) continue;
+      if (isGameFrame(frames[i])) return frames[i];
     }
     var named = document.querySelector(
       "[class*='GamePlayer'] iframe, [class*='game-player'] iframe, [class*='GameFrame'] iframe, [id*='game-container'] iframe, [data-testid*='game'] iframe"
@@ -56,7 +65,7 @@ CHROME_HIDE_JS = r"""
     var best = null;
     var bestArea = 0;
     for (i = 0; i < frames.length; i++) {
-      if (isAdFrame(frames[i])) continue;
+      if (isAdFrame(frames[i]) || isWrongGame(frames[i])) continue;
       var area = Math.max(frames[i].clientWidth, 0) * Math.max(frames[i].clientHeight, 0);
       if (area > bestArea) {
         bestArea = area;
@@ -77,7 +86,7 @@ CHROME_HIDE_JS = r"""
     style.textContent = [
       "html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:100%!important;height:100%!important;background:#000!important;}",
       "iframe.pokiwrap-game{position:fixed!important;inset:0!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;min-width:100vw!important;min-height:100vh!important;max-width:none!important;max-height:none!important;border:0!important;margin:0!important;padding:0!important;z-index:2147483647!important;background:#000!important;display:block!important;visibility:visible!important;opacity:1!important;transform:none!important;clip:auto!important;clip-path:none!important;}",
-      "iframe[src*='doubleclick'],iframe[src*='googlesyndication'],iframe[src*='ads.poki'],iframe[src*='imasdk'],iframe[src*='amazon-adsystem'],ins.adsbygoogle,[id*='google_ads'],[class*='Advertisement'],[class*='ad-slot'],[class*='AdSlot']{display:none!important;visibility:hidden!important;pointer-events:none!important;width:0!important;height:0!important;}"
+      "iframe[src*='doubleclick'],iframe[src*='googlesyndication'],iframe[src*='ads.poki'],iframe[src*='/ads/'],iframe[src*='housead'],iframe[src*='imasdk'],iframe[src*='amazon-adsystem'],ins.adsbygoogle,[id*='google_ads'],[class*='Advertisement'],[class*='ad-slot'],[class*='AdSlot'],[class*='HouseAd'],[class*='CommercialBreak']{display:none!important;visibility:hidden!important;pointer-events:none!important;width:0!important;height:0!important;}"
     ].join("");
   }
 
@@ -160,10 +169,24 @@ CHROME_HIDE_JS = r"""
     if (ot) ot.click();
   }
 
+  function hidePromo() {
+    var nodes = document.querySelectorAll("a, button, [role='button']");
+    for (var i = 0; i < nodes.length; i++) {
+      var t = (nodes[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (t.indexOf("play it on poki") >= 0 || t === "play on poki") {
+        var wrap = nodes[i].closest("[class*='Ad'], [class*='Overlay'], [class*='Modal'], [class*='Splash'], [class*='Promo']") || nodes[i];
+        wrap.style.setProperty("display", "none", "important");
+        wrap.style.setProperty("visibility", "hidden", "important");
+        wrap.style.setProperty("pointer-events", "none", "important");
+      }
+    }
+  }
+
   function tick() {
     try {
       ensureStyle();
       clickAccept();
+      hidePromo();
       var game = pickGame();
       if (!fill(game)) return;
       if (!window.__pokiwrapReady) {
@@ -185,12 +208,57 @@ CHROME_HIDE_JS = r"""
         event.preventDefault();
         event.stopPropagation();
       }
+      var label = (link.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (label.indexOf("play it on poki") >= 0) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     }, true);
     setInterval(tick, 400);
     try {
       new MutationObserver(tick).observe(document.documentElement, { childList: true, subtree: true });
     } catch (err) {}
   }
+})();
+"""
+
+AD_SKIP_JS = r"""
+(function () {
+  function stubSdk() {
+    var sdk = window.PokiSDK;
+    if (!sdk) return;
+    sdk.commercialBreak = function (cb) {
+      try { if (typeof cb === "function") cb(); } catch (e) {}
+      return Promise.resolve();
+    };
+    sdk.rewardedBreak = function () { return Promise.resolve(false); };
+    sdk.displayAd = function () {};
+    sdk.destroyAd = function () {};
+    sdk.isAdBlocked = function () { return true; };
+  }
+  function hidePromo() {
+    var nodes = document.querySelectorAll("a, button, [role='button']");
+    for (var i = 0; i < nodes.length; i++) {
+      var t = (nodes[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (t.indexOf("play it on poki") >= 0 || t === "play on poki") {
+        var wrap = nodes[i].closest("div") || nodes[i];
+        wrap.style.setProperty("display", "none", "important");
+        wrap.style.setProperty("pointer-events", "none", "important");
+      }
+    }
+  }
+  function tick() {
+    try { stubSdk(); hidePromo(); } catch (e) {}
+  }
+  document.addEventListener("click", function (event) {
+    var t = ((event.target && event.target.textContent) || "").toLowerCase();
+    if (t.indexOf("play it on poki") >= 0) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, true);
+  tick();
+  setInterval(tick, 400);
 })();
 """
 
@@ -224,6 +292,7 @@ APP_NAME = __APP_NAME__
 TARGET_SLUG = __TARGET_SLUG__
 PROFILE_NAME = __PROFILE_NAME__
 CHROME_HIDE_JS = __CHROME_HIDE_JS__
+AD_SKIP_JS = __AD_SKIP_JS__
 
 
 def _shared_pokiwrap_profile() -> Path:
@@ -287,13 +356,34 @@ class GamePage(QWebEnginePage):
         def follow(url: QUrl) -> None:
             if url.isEmpty() or url.scheme() in {"about", "blob", "javascript"}:
                 return
+            text = url.toString().lower()
+            if any(token in text for token in ("doubleclick", "googlesyndication", "imasdk", "amazon-adsystem", "/ads/", "housead", "ads.poki")):
+                return
+            host = (url.host() or "").lower()
+            path = url.path() or ""
+            if "poki.com" in host and TARGET_SLUG and "/g/" in path:
+                slug = path.rstrip("/").split("/")[-1].lower()
+                if slug != TARGET_SLUG.lower():
+                    return
+            if any(token in text for token in ("accounts.google", "appleid.apple", "login.live", "login.microsoftonline", "firebaseapp")):
+                self.setUrl(url)
+                return
+            if "poki.com" in host or "poki-gdn.com" in host or "poki-cdn.com" in host:
+                return
             self.setUrl(url)
 
         holder.urlChanged.connect(follow)
         return holder
 
     def acceptNavigationRequest(self, url, nav_type, is_main_frame) -> bool:
+        text = url.toString().lower()
+        if "/ads/" in text or "housead" in text or "ads.poki" in text:
+            return False
         if not is_main_frame:
+            if TARGET_SLUG and "poki.com" in (url.host() or "").lower() and "/g/" in (url.path() or ""):
+                slug = url.path().rstrip("/").split("/")[-1].lower()
+                if slug != TARGET_SLUG.lower():
+                    return False
             return True
         host = (url.host() or "").lower()
         path = url.path() or ""
@@ -336,6 +426,14 @@ class GameWindow(QMainWindow):
         hide.setRunsOnSubFrames(False)
         hide.setSourceCode(CHROME_HIDE_JS)
         self._profile.scripts().insert(hide)
+
+        skip = QWebEngineScript()
+        skip.setName("pokiwrap-skip-ads")
+        skip.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        skip.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        skip.setRunsOnSubFrames(True)
+        skip.setSourceCode(AD_SKIP_JS)
+        self._profile.scripts().insert(skip)
 
         self.view = QWebEngineView(self)
         page = GamePage(self._profile, self.view)

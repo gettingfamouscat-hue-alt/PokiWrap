@@ -73,6 +73,8 @@ ads.youtube.com
 addthis.com
 sharethrough.com
 serving-sys.com
+ay.delivery
+onetag-sys.com
 adtrafficquality.google
 """.strip()
 

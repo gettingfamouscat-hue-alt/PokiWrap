@@ -97,11 +97,36 @@ internal static class AdBlock
         return false;
     }
 
+    static bool IsAdPath(Uri parsed)
+    {
+        string host = parsed.Host.ToLowerInvariant();
+        string path = (parsed.AbsolutePath ?? "").ToLowerInvariant();
+        string query = (parsed.Query ?? "").ToLowerInvariant();
+        if (HostIs(host, "ads.poki.com") || HostIs(host, "ay.delivery") || HostIs(host, "onetag-sys.com"))
+            return true;
+        if (path.IndexOf("/ads/") >= 0)
+            return true;
+        if (path.IndexOf("housead") >= 0 || query.IndexOf("housead") >= 0)
+            return true;
+        if (path.IndexOf("/vast") >= 0 || path.EndsWith(".vast") || path.IndexOf("ima3.js") >= 0)
+            return true;
+        if (path.IndexOf("prebid") >= 0)
+            return true;
+        return false;
+    }
+
+    public static bool IsAdRequest(string uri)
+    {
+        return ShouldBlock(uri);
+    }
+
     static bool ShouldBlock(string uri)
     {
         try
         {
             Uri parsed = new Uri(uri);
+            if (IsAdPath(parsed))
+                return true;
             string host = parsed.Host;
             if (string.IsNullOrEmpty(host))
                 return false;

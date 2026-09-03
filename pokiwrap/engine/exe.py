@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pokiwrap.engine.account import FIND_USER_JS
 from pokiwrap.engine.shortcut import _safe_shortcut_name
-from pokiwrap.engine.template import CHROME_HIDE_JS
+from pokiwrap.engine.template import AD_SKIP_JS, CHROME_HIDE_JS
 from pokiwrap.engine.webview2 import ensure_webview2
 from pokiwrap.paths import (
     account_cookies_path,
@@ -152,6 +152,16 @@ internal sealed class GameForm : Form
                 ePerm.State = CoreWebView2PermissionState.Allow;
             }};
             AdBlock.Attach(web.CoreWebView2, {adblock_list}, {adblock_settings});
+            web.CoreWebView2.NavigationStarting += delegate(object sStart, CoreWebView2NavigationStartingEventArgs eStart)
+            {{
+                if (AdBlock.IsAdRequest(eStart.Uri) || _IsOtherPokiGame(eStart.Uri, {target_slug}))
+                    eStart.Cancel = true;
+            }};
+            web.CoreWebView2.FrameNavigationStarting += delegate(object sFrame, CoreWebView2NavigationStartingEventArgs eFrame)
+            {{
+                if (AdBlock.IsAdRequest(eFrame.Uri) || _IsOtherPokiGame(eFrame.Uri, {target_slug}))
+                    eFrame.Cancel = true;
+            }};
             web.CoreWebView2.WebMessageReceived += delegate(object sMsg, CoreWebView2WebMessageReceivedEventArgs eMsg)
             {{
                 loading.Visible = false;
@@ -171,9 +181,14 @@ internal sealed class GameForm : Form
             web.CoreWebView2.NewWindowRequested += delegate(object sWin, CoreWebView2NewWindowRequestedEventArgs eWin)
             {{
                 eWin.Handled = true;
-                try {{ web.CoreWebView2.Navigate(eWin.Uri); }} catch {{ }}
+                string popup = eWin.Uri ?? "";
+                if (_IsOAuth(popup))
+                {{
+                    try {{ web.CoreWebView2.Navigate(popup); }} catch {{ }}
+                }}
             }};
             web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync({fill_js});
+            web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync({ad_js});
             Timer iso = new Timer();
             iso.Interval = 500;
             iso.Tick += delegate(object sIso, EventArgs eIso)
@@ -207,6 +222,41 @@ internal sealed class GameForm : Form
             }};
             hide.Start();
         }};
+    }}
+
+    static bool _IsOAuth(string uri)
+    {{
+        string text = (uri ?? "").ToLowerInvariant();
+        return text.IndexOf("accounts.google.") >= 0
+            || text.IndexOf("appleid.apple") >= 0
+            || text.IndexOf("login.live") >= 0
+            || text.IndexOf("login.microsoftonline") >= 0
+            || text.IndexOf("firebaseapp") >= 0
+            || text.IndexOf("identitytoolkit") >= 0;
+    }}
+
+    static bool _IsOtherPokiGame(string uri, string slug)
+    {{
+        try
+        {{
+            if (string.IsNullOrEmpty(uri) || string.IsNullOrEmpty(slug))
+                return false;
+            Uri parsed = new Uri(uri);
+            string path = parsed.AbsolutePath ?? "";
+            int index = path.IndexOf("/g/", StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+                return false;
+            string rest = path.Substring(index + 3).Trim('/');
+            if (rest.Length == 0)
+                return false;
+            string other = rest.Split('/')[0];
+            int q = other.IndexOf('?');
+            if (q >= 0)
+                other = other.Substring(0, q);
+            return !other.Equals(slug, StringComparison.OrdinalIgnoreCase);
+        }}
+        catch {{ }}
+        return false;
     }}
 
     static bool _HasLinkedAccount(string accountFile, string cookieFile)
@@ -382,6 +432,8 @@ def build_game_exe(
             app_name=_csharp_string(app_name),
             icon_path=_csharp_string(str(icon.resolve()) if icon.exists() else ""),
             fill_js=_csharp_string(isolate),
+            ad_js=_csharp_string(AD_SKIP_JS),
+            target_slug=_csharp_string(slug),
             game_url=_csharp_string(game_url),
             page_url=_csharp_string(page),
             cookies_path=_csharp_string(str(account_cookies_path())),
