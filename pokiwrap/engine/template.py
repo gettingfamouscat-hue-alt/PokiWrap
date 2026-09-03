@@ -27,7 +27,7 @@ CHROME_HIDE_JS = r"""
     if (isAdFrame(iframe) || isWrongGame(iframe)) return false;
     if (isAuthFrame(iframe) || isGameFrame(iframe)) return true;
     var src = frameSrc(iframe).trim();
-    if (!src || /about:blank|javascript:/i.test(src)) return true;
+    if (!src || /about:blank|javascript:/i.test(src)) return false;
     if (/\/ads\/|housead|\/vast/i.test(src)) return false;
     return /poki\.com|poki\.io|poki-cdn|poki-gdn|poki-user-content|crazygames\.com|googleapis|gstatic|google|apple|microsoft|live\.com/i.test(src);
   }
@@ -74,8 +74,8 @@ CHROME_HIDE_JS = r"""
         best = frames[i];
       }
     }
-    if (best && bestArea >= 20000) return best;
-    return null;
+    if (best) return best;
+    return frames.length ? frames[0] : null;
   }
 
   function ensureStyle() {
@@ -87,6 +87,7 @@ CHROME_HIDE_JS = r"""
     }
     style.textContent = [
       "html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:100%!important;height:100%!important;background:#000!important;}",
+      "header,nav,footer,aside,[role='banner'],[role='navigation'],[class*='PageHeader'],[class*='page-header'],[class*='NavBar'],[class*='Navbar'],[class*='TopBar'],[class*='top-bar'],[class*='GamesBar'],[class*='GameBar'],[class*='BottomBar'],[class*='Sidebar'],[class*='RightRail'],[class*='AdRail'],[class*='Advertisement'],[class*='HouseAd'],[class*='CommercialBreak'],[data-panel-section='popular']{display:none!important;visibility:hidden!important;pointer-events:none!important;height:0!important;max-height:0!important;}",
       "iframe.pokiwrap-game{position:fixed!important;inset:0!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;min-width:100vw!important;min-height:100vh!important;max-width:none!important;max-height:none!important;border:0!important;margin:0!important;padding:0!important;z-index:2147483647!important;background:#000!important;display:block!important;visibility:visible!important;opacity:1!important;transform:none!important;clip:auto!important;clip-path:none!important;}",
       "iframe[src*='doubleclick'],iframe[src*='googlesyndication'],iframe[src*='ads.poki'],iframe[src*='/ads/'],iframe[src*='housead'],iframe[src*='imasdk'],iframe[src*='amazon-adsystem'],ins.adsbygoogle,[id*='google_ads'],[class*='Advertisement'],[class*='ad-slot'],[class*='AdSlot'],[class*='HouseAd'],[class*='CommercialBreak']{display:none!important;visibility:hidden!important;pointer-events:none!important;width:0!important;height:0!important;}"
     ].join("");
@@ -222,6 +223,11 @@ CHROME_HIDE_JS = r"""
       }
     }, true);
     setInterval(tick, 400);
+    var n = 0;
+    var fast = setInterval(function () {
+      tick();
+      if (++n > 50) clearInterval(fast);
+    }, 80);
     try {
       new MutationObserver(tick).observe(document.documentElement, { childList: true, subtree: true });
     } catch (err) {}
@@ -405,6 +411,8 @@ def _is_ad_request(url: QUrl, blocked: set[str]) -> bool:
     host = (url.host() or "").lower()
     path = (url.path() or "").lower()
     text = url.toString().lower()
+    if _host_is(host, "v.poki-cdn.com"):
+        return True
     if _host_is(host, "ads.poki.com") or _host_is(host, "ads.crazygames.com") or _host_is(host, "ay.delivery") or _host_is(host, "onetag-sys.com"):
         return True
     if "/ads/" in path or "housead" in path or "housead" in text:
@@ -604,7 +612,7 @@ class GameWindow(QMainWindow):
 
         hide = QWebEngineScript()
         hide.setName("pokiwrap-hide-chrome")
-        hide.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentReady)
+        hide.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
         hide.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
         hide.setRunsOnSubFrames(False)
         hide.setSourceCode(CHROME_HIDE_JS)

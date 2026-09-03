@@ -71,8 +71,10 @@ def _browser_roots() -> list[tuple[Path, tuple[str, str] | None]]:
         support = Path.home() / "Library" / "Application Support"
         return [
             (support / "Google" / "Chrome", ("Chrome Safe Storage", "Chrome")),
+            (support / "Google" / "Chrome", ("Chrome Safe Storage", None)),
             (support / "Google" / "Chrome Beta", ("Chrome Safe Storage", "Chrome")),
             (support / "Microsoft Edge", ("Microsoft Edge Safe Storage", "Microsoft Edge")),
+            (support / "Microsoft Edge", ("Microsoft Edge Safe Storage", None)),
             (support / "BraveSoftware" / "Brave-Browser", ("Brave Safe Storage", "Brave")),
             (support / "Chromium", ("Chromium Safe Storage", "Chromium")),
         ]
@@ -153,18 +155,20 @@ def _windows_master_key(root: Path) -> bytes | None:
         return None
 
 
-def _mac_master_key(service: str, account: str) -> bytes | None:
-    try:
-        raw = subprocess.check_output(
-            ["security", "find-generic-password", "-w", "-s", service, "-a", account],
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    password = raw.decode("utf-8", "replace").strip("\r\n")
-    if not password:
-        return None
-    return pbkdf2_hmac("sha1", password.encode("utf-8"), b"saltysalt", 1003, 16)
+def _mac_master_key(service: str, account: str | None) -> bytes | None:
+    commands = []
+    if account:
+        commands.append(["security", "find-generic-password", "-w", "-s", service, "-a", account])
+    commands.append(["security", "find-generic-password", "-w", "-s", service])
+    for command in commands:
+        try:
+            raw = subprocess.check_output(command, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        password = raw.decode("utf-8", "replace").strip("\r\n")
+        if password:
+            return pbkdf2_hmac("sha1", password.encode("utf-8"), b"saltysalt", 1003, 16)
+    return None
 
 
 def _decrypt_value(raw: bytes, key: bytes | None) -> str:
@@ -289,6 +293,20 @@ def parse_cookie_file(path: Path | None = None) -> list[CookieRecord]:
             )
         )
     return records
+
+
+def session_hosts(records: list[CookieRecord] | None = None) -> tuple[int, int]:
+    items = records if records is not None else parse_cookie_file()
+    poki = sum(1 for item in items if "poki" in item.host.lower())
+    google = sum(1 for item in items if "google" in item.host.lower())
+    return poki, google
+
+
+def chrome_profile_exists() -> bool:
+    for root, _keychain in _browser_roots():
+        if (root / "Default").is_dir() or (root / "Local State").exists():
+            return True
+    return False
 
 
 def export_browser_cookies() -> int:

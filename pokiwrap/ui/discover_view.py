@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -16,7 +17,6 @@ from PyQt6.QtWidgets import (
 from pokiwrap.catalog import GAMES, catalog_counts, filter_catalog, load_cached_catalog
 from pokiwrap.engine.generator import game_slug_from_url, is_valid_http_url, normalize_game_url
 from pokiwrap.engine.workers import CatalogFetchWorker, CatalogLogoWorker, PagePreviewWorker
-from pokiwrap.ui.flow_layout import FlowLayout
 from pokiwrap.ui.game_card import GameCard, rounded_logo
 
 MAX_VISIBLE = 72
@@ -25,23 +25,51 @@ MAX_VISIBLE = 72
 class _CatalogGrid(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._flow = FlowLayout(self, spacing=16)
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(16)
+        self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._cards: list[GameCard] = []
+        self._columns = 0
 
-    def add_card(self, card: GameCard) -> None:
-        self._flow.addWidget(card)
+    def set_cards(self, cards: list[GameCard]) -> None:
+        self.clear_cards()
+        self._cards = cards
+        self._place_cards()
 
     def clear_cards(self) -> None:
-        self._flow.clear()
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            if item is None:
+                break
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._cards = []
 
-    def hasHeightForWidth(self) -> bool:
-        return True
-
-    def heightForWidth(self, width: int) -> int:
-        return self._flow.heightForWidth(width)
+    def _place_cards(self) -> None:
+        width = max(self.width(), self.parentWidget().width() if self.parentWidget() else 800)
+        columns = max(1, width // 226)
+        self._columns = columns
+        for index, card in enumerate(self._cards):
+            self._grid.addWidget(card, index // columns, index % columns)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self.setMinimumHeight(self.heightForWidth(max(self.width(), 1)))
+        if not self._cards:
+            return
+        width = max(self.width(), 1)
+        columns = max(1, width // 226)
+        if columns != getattr(self, "_columns", 0):
+            widgets = list(self._cards)
+            while self._grid.count():
+                item = self._grid.takeAt(0)
+                if item is not None and item.widget() is not None:
+                    self._grid.removeWidget(item.widget())
+            self._columns = columns
+            for index, card in enumerate(widgets):
+                self._grid.addWidget(card, index // columns, index % columns)
 
 
 class DiscoverView(QWidget):
@@ -201,11 +229,13 @@ class DiscoverView(QWidget):
 
         self._cards_grid.clear_cards()
         self._cards = {}
+        cards: list[GameCard] = []
         for game in visible:
             card = GameCard(game)
             card.download_requested.connect(self.catalog_requested.emit)
-            self._cards_grid.add_card(card)
+            cards.append(card)
             self._cards[game.url] = card
+        self._cards_grid.set_cards(cards)
         if self._logo_worker is not None:
             self._logo_worker.requestInterruption()
         self._logo_worker = CatalogLogoWorker(visible, self)

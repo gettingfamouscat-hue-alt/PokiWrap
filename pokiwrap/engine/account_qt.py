@@ -27,7 +27,12 @@ from PyQt6.QtWidgets import (
 )
 
 from pokiwrap.engine.account import FIND_USER_JS, load_account
-from pokiwrap.engine.browser_cookies import export_browser_cookies, parse_cookie_file
+from pokiwrap.engine.browser_cookies import (
+    chrome_profile_exists,
+    export_browser_cookies,
+    parse_cookie_file,
+    session_hosts,
+)
 from pokiwrap.paths import account_profile_dir, account_state_path, assets_dir
 
 STEALTH_JS = r"""
@@ -70,21 +75,39 @@ def _inject_browser_cookies(profile: QWebEngineProfile) -> int:
     records = parse_cookie_file()
     store = profile.cookieStore()
     count = 0
+    same_enum = getattr(QNetworkCookie, "SameSite", None)
+    same_none = None
+    if same_enum is not None:
+        same_none = getattr(same_enum, "None_", None) or getattr(same_enum, "None", None)
     for record in records:
-        cookie = QNetworkCookie(record.name.encode("utf-8"), record.value.encode("utf-8"))
-        cookie.setDomain(record.host)
-        cookie.setPath(record.path or "/")
-        cookie.setSecure(record.secure)
-        cookie.setHttpOnly(record.http_only)
-        if not record.session and record.expires > 0:
-            cookie.setExpirationDate(QDateTime.fromSecsSinceEpoch(int(record.expires)))
-        host = record.host.lstrip(".")
-        url = QUrl(("https://" if record.secure else "http://") + host + (record.path or "/"))
-        try:
-            if store.setCookie(cookie, url):
-                count += 1
-        except Exception:
-            continue
+        bare = (record.host or "").lstrip(".")
+        domains = [record.host, bare, "." + bare if bare else ""]
+        seen: set[str] = set()
+        applied = False
+        for domain in domains:
+            if not domain or domain in seen:
+                continue
+            seen.add(domain)
+            cookie = QNetworkCookie(record.name.encode("utf-8"), record.value.encode("utf-8"))
+            cookie.setDomain(domain)
+            cookie.setPath(record.path or "/")
+            cookie.setSecure(True)
+            cookie.setHttpOnly(record.http_only)
+            if same_none is not None:
+                try:
+                    cookie.setSameSitePolicy(same_none)
+                except Exception:
+                    pass
+            if not record.session and record.expires > 0:
+                cookie.setExpirationDate(QDateTime.fromSecsSinceEpoch(int(record.expires)))
+            for origin in (f"https://{bare}/", f"https://www.{bare}/"):
+                try:
+                    store.setCookie(cookie, QUrl(origin))
+                    applied = True
+                except Exception:
+                    continue
+        if applied:
+            count += 1
     return count
 
 
@@ -237,15 +260,34 @@ class LoginDialog(QDialog):
     def _import_chrome(self) -> None:
         self.status.setText("Reading Chrome cookies…")
         count = _inject_browser_cookies(self._profile)
-        self.view.setUrl(QUrl("https://poki.com/en"))
-        if count:
+        poki_n, google_n = session_hosts()
+        QTimer.singleShot(400, lambda: self.view.setUrl(QUrl("https://poki.com/en")))
+        if poki_n:
+            self._logged_in = True
+            if not self._username:
+                self._username = "Poki"
             self.status.setText(
-                f"Imported {count} cookies from Chrome. Wait a moment while PokiWrap checks if you are signed in…"
+                f"Imported {count} cookies ({poki_n} Poki). Reloading Poki to pick up the session…"
             )
-        else:
+            QTimer.singleShot(4000, self._finish_if_imported)
+            return
+        if count or google_n:
             self.status.setText(
-                "No Poki/Google cookies found. Sign in to poki.com in Chrome first, allow Keychain access if asked, then click Import again."
+                "Imported Google cookies, but no Poki session yet. Sign in to poki.com in Chrome (not only Google), quit Chrome, then Import again."
             )
+            return
+        if chrome_profile_exists():
+            self.status.setText(
+                "Chrome is installed, but cookies could not be read. Quit Chrome completely, click Import again, and allow Keychain access if macOS asks."
+            )
+            return
+        self.status.setText(
+            "No Chrome profile found. Open Chrome, sign in to poki.com, then click Import from Chrome."
+        )
+
+    def _finish_if_imported(self) -> None:
+        if self._logged_in or self._username:
+            self._finish()
 
     def _poll(self) -> None:
         self.view.page().runJavaScript(FIND_USER_JS, self._on_user)

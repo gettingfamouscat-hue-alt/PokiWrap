@@ -23,9 +23,10 @@ class GameCard(QFrame):
         self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         title = QLabel(game.title)
+        title.setObjectName("cardTitle")
         title.setWordWrap(True)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 15px; font-weight: 700; background: transparent; border: none;")
+        title.setStyleSheet("font-size: 15px; font-weight: 700; background: transparent; border: none; color: #E8EAED;")
 
         tagline = QLabel(game.tagline)
         tagline.setAlignment(Qt.AlignmentFlag.AlignCenter)
